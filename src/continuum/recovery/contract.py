@@ -25,7 +25,6 @@ from typing import Any
 from continuum.models import (
     CONTRACT_VERSION,
     Component,
-    ComponentValidationEntry,
     RecoveryContract,
     RecoverySafety,
     StateStatus,
@@ -43,6 +42,8 @@ __all__ = [
     "CURRENT_CONTRACT_VERSION",
     "ContractVersionSpec",
     "ContractVerification",
+    "canonical_digest_input",
+    "contract_digest",
     "SUPPORTED_CONTRACT_VERSIONS",
     "build_contract",
     "render_budget",
@@ -182,7 +183,7 @@ def _identifier(component: Component, component_id: str | None) -> str:
     return f"{component.value}:{component_id}" if component_id else component.value
 
 
-def _namespaced(entry: ComponentValidationEntry) -> str:
+def _namespaced(entry: Any) -> str:
     """The component identifier, with the rule that reported it (issue #761).
 
     A rule's findings are namespaced by its identifier so an operator reading
@@ -213,12 +214,18 @@ def render_budget(budget: BudgetStatus) -> str:
 
 
 def _liveness_digest_value(liveness: Any) -> Any:
-    """The stable representation of ``liveness`` for digest computation.
+    """``liveness`` with its one wall-clock reading stripped.
 
     ``last_append_age`` is seconds since the last append at assessment time, so
-    two assessments of an unchanged run would seal different hashes without
-    this. The verdict fields (``breached``, ``threshold_seconds``, ``phase``,
-    ``breaches``) stay covered.
+    it differs between two assessments of an otherwise identical run. Sealing
+    it would give one run two hashes for one state. The verdict fields
+    (``breached``, ``threshold_seconds``, ``phase``, ``breaches``) stay
+    covered. A non-dict ``liveness`` is returned unchanged, so a legacy
+    payload carrying a bare value still digests.
+
+    Published in ``docs/contract_compatibility.md`` and reproduced
+    independently by ``continuum.recovery.conformance``, so both seams strip
+    exactly this key.
     """
     if isinstance(liveness, dict):
         return {k: v for k, v in liveness.items() if k != "last_append_age"}

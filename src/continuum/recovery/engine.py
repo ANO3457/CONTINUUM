@@ -44,13 +44,6 @@ if TYPE_CHECKING:
 from continuum.actions.ledger import ActionLedger
 from continuum.analysis.depends import DependencyGraph as SourceDependencyGraph
 from continuum.checkpoint.manager import CheckpointManager, RestoredRun
-from continuum.environment.config import (
-    ProviderConfig,
-    ProviderDiagnostic,
-    ProviderRegistry,
-    config_from_events,
-    resolve_and_capture,
-)
 from continuum.environment.diff import EnvironmentDiff
 from continuum.events import EventType
 from continuum.gate import collect_consumed_authorities
@@ -140,11 +133,6 @@ class RecoveryDecision:
     #: events plus current failure signals, or None when there is no history.
     #: Informational only; presence never changes mode or safety.
     informed_retry: dict[str, Any] | None = None
-    #: Per-provider outcomes from the run's configured providers (issue #762),
-    #: empty when the caller supplied the environment or the run configures
-    #: none. A non-empty entry is evidence, not a mode: an unavailable provider
-    #: already degrades validation through the UNKNOWN resources it produced.
-    provider_diagnostics: tuple[ProviderDiagnostic, ...] = ()
 
     @property
     def state(self) -> SemanticState:
@@ -260,11 +248,10 @@ class RecoveryEngine:
         *,
         validator: StateValidator | None = None,
         strict_unknown: bool = True,
-        providers: ProviderRegistry | None = None,
-        ledger: RecoveryLedger | None = None,
-        dependency_budgets: Mapping[str, Any] | None = None,
         validation_rules: Iterable[ValidationRule] | None = None,
         registry: Registry | None = None,
+        ledger: RecoveryLedger | None = None,
+        dependency_budgets: Mapping[str, Any] | None = None,
     ) -> None:
         """Build an engine.
 
@@ -283,21 +270,22 @@ class RecoveryEngine:
         self.validator = validator or StateValidator(strict_unknown=strict_unknown)
         self.strict_unknown = strict_unknown
         self.ledger = ledger
-        self._ledger = ledger
         self.dependency_budgets = dependency_budgets
         self._manager = CheckpointManager(storage)
-        #: Providers a configuration may resolve by name. Built-ins need no
-        #: registration; this is how a CallableProvider becomes discoverable.
-        self.providers = providers or ProviderRegistry()
         self._validation_rules: tuple[object, ...] = tuple(validation_rules or ())
         if registry is not None:
-            # A seam is a Protocol: structural selection, then narrowing.
             registered = tuple(
                 service
                 for service in registry.all_matching(ValidationRule)
                 if isinstance(service, ValidationRule)
             )
             self._validation_rules = (*self._validation_rules, *registered)
+        # Optional (issue #744): a recovery ledger to read the attempt budget
+        # from. Absent it, contracts carry no budget line and every decision is
+        # byte-identical to before. Present, it is only ever read here: spending
+        # the allowance is the caller's job (a resume attempt), not the
+        # assessment's, so assess stays free of side effects.
+        self._ledger = ledger
 
     def assess(
         self,
@@ -308,7 +296,6 @@ class RecoveryEngine:
         replay: bool = True,
         scope: Iterable[str] | None = None,
         source_graph: SourceDependencyGraph | None = None,
-        provider_config: ProviderConfig | None = None,
         validation_rules: Iterable[ValidationRule] | None = None,
         ledger: RecoveryLedger | None = None,
         dependency_budgets: Mapping[str, Any] | None = None,
@@ -369,24 +356,6 @@ class RecoveryEngine:
             archive_aware_events = self.storage.read_all_events(run_id)
         except Exception:
             archive_aware_events = self.storage.read_events(run_id)
-
-        # Discoverable providers (issue #762): when the caller did not hand over
-        # a current environment, consult the run's configured providers instead,
-        # so a run that registered a world-observer is validated by it at resume
-        # without anyone having to remember to pass it in. An unconfigured run
-        # records no configuration event and keeps today's behaviour exactly.
-        provider_diagnostics: tuple[ProviderDiagnostic, ...] = ()
-        if current_environment is None:
-            config = (
-                provider_config
-                if provider_config is not None
-                else config_from_events(archive_aware_events)
-            )
-            if config is not None and config.specs:
-                captured = resolve_and_capture(run_id, config, registry=self.providers)
-                current_environment = captured.snapshot
-                provider_diagnostics = captured.diagnostics
-
         for _ev in archive_aware_events:
             if _ev.type is not EventType.REVIEW_CONFIRMED:
                 continue
@@ -495,6 +464,20 @@ class RecoveryEngine:
                 environment_diff=validation.environment_diff,
             )
 
+        # Domain validation rules (issue #761). Built-in validation asks whether
+        # the state still matches the environment; a domain rule knows
+        # staleness that question cannot reach. Rules run last, over the state
+        # built-in validation already revised, and their findings merge by
+        # maximum caution so a rule can escalate but never launder. With no
+        # rules configured this block returns the input untouched, which is
+        # what keeps the default path byte-identical.
+        rules = active_rules(self._validation_rules, validation_rules)
+        if rules:
+            rule_findings = run_validation_rules(rules, validation.state, current_environment)
+            validation = apply_rule_findings(
+                validation, rule_findings, strict_unknown=self.validator.strict_unknown
+            )
+
         active_ledger = ledger if ledger is not None else self.ledger
         active_budgets = (
             dependency_budgets if dependency_budgets is not None else self.dependency_budgets
@@ -512,43 +495,34 @@ class RecoveryEngine:
         exhausted_dependencies: set[str] = set()
         run_budget_exhausted = False
         if active_ledger is not None:
-            global_limit = active_budgets.get("global") if active_budgets else None
-            run_budget_exhausted = active_ledger.requires_human(
-                run_id, scope=None, global_max_attempts=global_limit
-            )
-            candidate_deps: set[str] = set()
-            if scope is not None:
-                candidate_deps.update(scope)
-            else:
-                from continuum.models import Component
+            try:
+                run_budget_exhausted = active_ledger.requires_human(
+                    run_id, scope=scope, dependency_budgets=active_budgets
+                )
+                candidate_deps: set[str] = set()
+                if scope is not None:
+                    candidate_deps.update(scope)
+                else:
+                    from continuum.models import Component
 
-                for entry in validation.report.statuses:
-                    if entry.component == Component.EXTERNAL_DEPENDENCY and entry.component_id:
-                        candidate_deps.add(entry.component_id)
-                for a in uncertain:
-                    if a.dep_scope:
-                        candidate_deps.add(a.dep_scope)
+                    for entry in validation.report.statuses:
+                        if entry.component == Component.EXTERNAL_DEPENDENCY and entry.component_id:
+                            candidate_deps.add(entry.component_id)
+                    for a in uncertain:
+                        if a.dep_scope:
+                            candidate_deps.add(a.dep_scope)
 
-            for dep in candidate_deps:
-                dep_limit = active_budgets.get(dep) if active_budgets else 3
-                if active_ledger.requires_human(
-                    run_id, scope=dep, max_attempts=dep_limit or 3, global_max_attempts=global_limit
-                ):
-                    exhausted_dependencies.add(dep)
-
-        # Domain validation rules (issue #761). Built-in validation asks whether
-        # the state still matches the environment; a domain rule knows
-        # staleness that question cannot reach. Rules run last, over the state
-        # built-in validation already revised, and their findings merge by
-        # maximum caution so a rule can escalate but never launder. With no
-        # rules configured this block returns the input untouched, which is
-        # what keeps the default path byte-identical.
-        rules = active_rules(self._validation_rules, validation_rules)
-        if rules:
-            rule_findings = run_validation_rules(rules, validation.state, current_environment)
-            validation = apply_rule_findings(
-                validation, rule_findings, strict_unknown=self.validator.strict_unknown
-            )
+                for dep in candidate_deps:
+                    if active_ledger.requires_human(
+                        run_id, dependency=dep, dependency_budgets=active_budgets
+                    ):
+                        exhausted_dependencies.add(dep)
+            except Exception:
+                # A degraded ledger must not brick recovery: the contract is
+                # then emitted without the budget line rather than changing
+                # the verdict.
+                run_budget_exhausted = False
+                exhausted_dependencies.clear()
 
         plan = plan_repairs(
             validation.report.statuses,
@@ -764,7 +738,6 @@ class RecoveryEngine:
             impacted_files=impacted_files,
             tail_evidence=tail_evidence,
             informed_retry=informed_retry,
-            provider_diagnostics=provider_diagnostics,
         )
 
         # Process-wide counters (#1032). Imported lazily: observability imports
@@ -850,17 +823,16 @@ class RecoveryEngine:
         if self.ledger is None:
             raise RuntimeError("RecoveryEngine was initialized without a RecoveryLedger")
         budgets = dependency_budgets if dependency_budgets is not None else self.dependency_budgets
-        resolved_scope = resolve_scope(dependency, dependencies, scope)
-        limit = max_attempts
-        if limit is None and budgets and resolved_scope is not None and resolved_scope in budgets:
-            limit = budgets[resolved_scope]
-        global_limit = budgets.get("global") if budgets else None
         return self.ledger.record_attempt(
             run_id,
             note=note,
-            max_attempts=limit,
-            global_max_attempts=global_limit,
-            scope=resolved_scope,
+            max_attempts=max_attempts,
+            dependency=dependency,
+            dependencies=dependencies,
+            contract=contract,
+            action=action,
+            scope=scope,
+            dependency_budgets=budgets,
         )
 
     def requires_human(
@@ -879,16 +851,15 @@ class RecoveryEngine:
         if self.ledger is None:
             return False
         budgets = dependency_budgets if dependency_budgets is not None else self.dependency_budgets
-        resolved_scope = resolve_scope(dependency, dependencies, scope)
-        limit = max_attempts
-        if budgets and resolved_scope is not None and resolved_scope in budgets:
-            limit = budgets[resolved_scope]
-        global_limit = budgets.get("global") if budgets else None
         return self.ledger.requires_human(
             run_id,
-            max_attempts=limit,
-            global_max_attempts=global_limit,
-            scope=resolved_scope,
+            max_attempts=max_attempts,
+            dependency=dependency,
+            dependencies=dependencies,
+            contract=contract,
+            action=action,
+            scope=scope,
+            dependency_budgets=budgets,
         )
 
     def _decide(

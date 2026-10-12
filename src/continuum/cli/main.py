@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import re
 import sqlite3
@@ -53,18 +52,7 @@ from continuum.clienthooks import (
     remove_claude_code_hook,
     remove_client_hook,
 )
-from continuum.environment import (
-    BUILTIN_PROVIDER_NAMES,
-    UNKNOWN_VERSION,
-    ProviderConfig,
-    ProviderSpec,
-    StaticProvider,
-    capture,
-    config_from_events,
-    parse_params,
-    record_provider_config,
-    resolve_and_capture,
-)
+from continuum.environment import StaticProvider, capture
 from continuum.events import EventType
 from continuum.gate import (
     DEFAULT_GATE_CONFIG_PATH,
@@ -92,7 +80,7 @@ from continuum.models import (
 from continuum.observability import render_dashboard
 from continuum.provenance.graph import build_provenance_graph, downstream_of
 from continuum.provenance_map import summarize
-from continuum.recovery import RecoveryEngine, render_contract
+from continuum.recovery import RecoveryDecision, RecoveryEngine, render_contract
 from continuum.runs import close_run
 from continuum.security.attestation import (
     generate_keypair,
@@ -123,7 +111,25 @@ from continuum.storage import (
 
 __all__ = ["main", "build_parser"]
 
-_DEFAULT_DB = "continuum.db"
+#: Filename of the store used when ``--db`` is not given. It is deliberately a
+#: bare name, not a path: the default is resolved against the current directory
+#: by :func:`_default_db` before it reaches a parser.
+_DEFAULT_DB_NAME = "continuum.db"
+
+
+def _default_db() -> str:
+    """The store ``--db`` defaults to, resolved against the current directory.
+
+    A bare ``continuum.db`` is read relative to the process cwd, so the same
+    command opened a *different* store from a different directory -- silently,
+    because the help text, ``init``'s report, and the error paths all repeated
+    the bare filename and named no directory (issue #1575). Resolving it here
+    moves no data: ``cwd/continuum.db`` is the same file ``continuum.db`` has
+    always opened. It only makes the file an operator is shown the one that
+    will actually be opened. Mirrors what ``mcp install`` already did for its
+    own path (``Path(args.db or Path.cwd() / "continuum.db").resolve()``).
+    """
+    return str(Path.cwd().joinpath(_DEFAULT_DB_NAME).resolve())
 
 
 # --------------------------------------------------------------------------- #
@@ -351,7 +357,7 @@ def cmd_runs(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> 
     runs = storage.list_runs(limit=args.limit)
     if not runs:
         _emit(
-            {"runs": []},
+            {"database": args.db, "runs": []},
             "No runs recorded.",
             as_json=args.json,
             stream=out,
@@ -375,7 +381,7 @@ def cmd_runs(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> 
         for r in runs
     ]
     _emit(
-        {"runs": payload},
+        {"database": args.db, "runs": payload},
         "\n".join(lines),
         as_json=args.json,
         stream=out,
@@ -803,259 +809,6 @@ def _page_bounds(
     start = min(offset, total)
     end = total if limit is None else min(total, start + limit)
     return start, end, total - (end - start)
-
-
-def _cli_provenance() -> str:
-    """Who recorded a configuration from the CLI, for the audit trail.
-
-    The event already carries its Origin and sequence; this is the short human
-    answer to "who turned this on", which is what an operator reads first when
-    a provider starts failing closed.
-    """
-    import getpass
-
-    try:
-        user = getpass.getuser()
-    except Exception:
-        user = "unknown"
-    return f"cli:{user}"
-
-
-def cmd_providers(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
-    """Configure the environment providers a run trusts at resume time.
-
-    The configuration lives in the event log, so it is append-only, hashed and
-    auditable: every invocation records the whole set, and the newest record is
-    authoritative. ``list`` and ``check`` are read-only; ``check`` resolves the
-    providers exactly as resume would and reports what each one said, so an
-    operator can see a failing observer before it gates a recovery.
-    """
-    action = args.providers_command
-    try:
-        storage.get_run(args.run_id)
-    except RunNotFound:
-        print(f"error: run {args.run_id!r} does not exist", file=err)
-        return ExitCode.NOT_FOUND
-
-    if action == "list":
-        return _providers_list(args, storage, out)
-    if action == "check":
-        return _providers_check(args, storage, out, err)
-    if action == "add":
-        return _providers_add(args, storage, out, err)
-    if action == "remove":
-        return _providers_remove(args, storage, out, err)
-    print(f"error: unknown providers action {action!r}", file=err)
-    return ExitCode.ERROR
-
-
-def _providers_config(storage: Storage, run_id: str) -> ProviderConfig:
-    """The run's current configuration, empty when it has never configured one."""
-    return config_from_events(storage.read_all_events(run_id)) or ProviderConfig()
-
-
-def _providers_list(args: argparse.Namespace, storage: Storage, out: Any) -> int:
-    config = _providers_config(storage, args.run_id)
-    specs: list[dict[str, Any]] = [
-        {
-            "provider": spec.provider,
-            "resources": sorted(spec.declared_resources()),
-            "enabled": spec.enabled,
-            "params": dict(spec.params),
-            "provenance": spec.provenance,
-        }
-        for spec in config.specs
-    ]
-    conflicts = {
-        key: sorted(s.provider for s in specs_) for key, specs_ in config.conflicts().items()
-    }
-    text = (
-        f"{len(specs)} provider(s) configured for run {args.run_id}"
-        if specs
-        else f"No providers configured for run {args.run_id}"
-    )
-    if not specs:
-        text += (
-            "; resume validates only what a caller supplies, and a run with no "
-            "configuration behaves exactly as it does without this command"
-        )
-    if conflicts:
-        text += f" ({len(conflicts)} resource key(s) claimed by more than one provider)"
-    _emit(
-        {
-            "run_id": args.run_id,
-            "schema_version": config.schema_version,
-            "providers": specs,
-            "conflicts": conflicts,
-            "builtins": sorted(BUILTIN_PROVIDER_NAMES),
-        },
-        text,
-        as_json=args.json,
-        stream=out,
-        palette=getattr(args, "_palette", None),
-    )
-    if args.json:
-        # JSON stays parseable: the detail lines below are prose for a human.
-        return ExitCode.OK
-    for spec in specs:
-        state = "enabled" if spec["enabled"] else "disabled"
-        keys = ", ".join(spec["resources"]) or "(derives none)"
-        print(f"  {spec['provider']} [{state}]: {keys}", file=out)
-    for key, names in sorted(conflicts.items()):
-        print(
-            f"  warning: {key} is claimed by {', '.join(names)}; both fail closed "
-            "at resume rather than one silently winning",
-            file=out,
-        )
-    return ExitCode.OK
-
-
-def _providers_check(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
-    """Resolve and capture with the configured providers, as resume would."""
-    config = _providers_config(storage, args.run_id)
-    if not config.specs:
-        _emit(
-            {"run_id": args.run_id, "providers": [], "resources": {}, "diagnostics": []},
-            f"No providers configured for run {args.run_id}; nothing to check.",
-            as_json=args.json,
-            stream=out,
-            palette=getattr(args, "_palette", None),
-        )
-        return ExitCode.OK
-    result = resolve_and_capture(args.run_id, config)
-    resources = {
-        key: {
-            "version": resource.version,
-            "kind": resource.kind,
-            "provider": resource.metadata.get("provider"),
-            "unknown": resource.version is None or resource.version == UNKNOWN_VERSION,
-        }
-        for key, resource in sorted(result.snapshot.resources.items())
-    }
-    diagnostics = [
-        {
-            "provider": d.provider,
-            "status": d.status.value,
-            "resources": sorted(d.resources),
-            "detail": d.detail,
-        }
-        for d in result.diagnostics
-    ]
-    text = f"Captured {len(resources)} resource(s) from {len(config.specs)} provider(s)."
-    if result.fail_closed:
-        failed = [d for d in result.diagnostics if d.status.blocking]
-        text = (
-            f"{len(failed)} provider(s) could not report their resources; those "
-            "resources are unknown, not assumed unchanged."
-        )
-    _emit(
-        {
-            "run_id": args.run_id,
-            "providers": [s.provider for s in config.specs],
-            "resources": resources,
-            "diagnostics": diagnostics,
-            "fail_closed": result.fail_closed,
-        },
-        text,
-        as_json=args.json,
-        stream=out,
-        palette=getattr(args, "_palette", None),
-    )
-    if not args.json:
-        for d in diagnostics:
-            print(f"  {d['provider']} [{d['status']}]: {d['detail']}", file=out)
-    return ExitCode.OK
-
-
-def _providers_add(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
-    resources = list(getattr(args, "resource", None) or [])
-    params = parse_params(getattr(args, "param", None) or [])
-    provider = args.provider
-    if provider not in BUILTIN_PROVIDER_NAMES and not resources:
-        # A built-in can derive its scope from its parameters; anything else is
-        # a registered name the resolver looks up, and only the caller knows
-        # what it owns, so its scope must be declared explicitly.
-        print(
-            f"error: --resource is required for {provider!r}, which is not a "
-            f"built-in ({', '.join(sorted(BUILTIN_PROVIDER_NAMES))})",
-            file=err,
-        )
-        return ExitCode.ERROR
-    if provider == "file" and "paths" not in params and resources:
-        # The file provider's resources are its paths; declaring them twice
-        # would be noise, so the resource keys stand in for the parameter.
-        params["paths"] = resources
-    try:
-        spec = ProviderSpec(
-            provider=provider,
-            resources=frozenset(resources),
-            params=params,
-            enabled=not bool(getattr(args, "disable", False)),
-            provenance=f"continuum providers add ({_cli_provenance()})",
-        )
-    except ValueError as exc:
-        print(f"error: {exc}", file=err)
-        return ExitCode.ERROR
-
-    config = _providers_config(storage, args.run_id)
-    if any(s.provider == spec.provider and s.resources == spec.resources for s in config.specs):
-        print(
-            f"error: provider {spec.provider!r} already declares those resources",
-            file=err,
-        )
-        return ExitCode.ERROR
-    updated = ProviderConfig(specs=(*config.specs, spec))
-    record_provider_config(storage, args.run_id, updated, provenance=spec.provenance)
-    keys = ", ".join(sorted(spec.declared_resources())) or "(derives scope)"
-    _emit(
-        {
-            "run_id": args.run_id,
-            "provider": spec.provider,
-            "resources": sorted(spec.declared_resources()),
-            "enabled": spec.enabled,
-            "providers": [s.provider for s in updated.specs],
-        },
-        f"Configured {spec.provider} for run {args.run_id}: {keys}",
-        as_json=args.json,
-        stream=out,
-        palette=getattr(args, "_palette", None),
-    )
-    return ExitCode.OK
-
-
-def _providers_remove(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
-    config = _providers_config(storage, args.run_id)
-    name = args.provider
-    if getattr(args, "all", False):
-        removed = config.specs
-        kept: tuple[ProviderSpec, ...] = ()
-    else:
-        if not name:
-            print("error: pass --provider or --all", file=err)
-            return ExitCode.ERROR
-        removed = tuple(s for s in config.specs if s.provider == name)
-        kept = tuple(s for s in config.specs if s.provider != name)
-    if not removed:
-        print(f"error: no configured provider named {name!r}", file=err)
-        return ExitCode.NOT_FOUND
-    record_provider_config(
-        storage,
-        args.run_id,
-        ProviderConfig(specs=kept),
-        provenance=f"continuum providers remove ({_cli_provenance()})",
-    )
-    _emit(
-        {
-            "run_id": args.run_id,
-            "removed": [s.provider for s in removed],
-            "providers": [s.provider for s in kept],
-        },
-        f"Removed {len(removed)} provider record(s); {len(kept)} remain.",
-        as_json=args.json,
-        stream=out,
-        palette=getattr(args, "_palette", None),
-    )
-    return ExitCode.OK
 
 
 def cmd_provenance(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
@@ -3260,6 +3013,210 @@ def cmd_gateway(args: argparse.Namespace, storage: Storage, out: Any, err: Any) 
     return ExitCode.OK
 
 
+def cmd_daemon(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
+    """Run CONTINUUM as a background daemon (gateway + watch).
+
+    Starts the enforcing HTTP gateway as a long-running process. Use
+    ``--detach`` to fork into the background and write a PID file.
+    """
+    import signal
+    import sys
+
+    from continuum.gateway import (
+        DEFAULT_GATEWAY_CONFIG_PATH,
+        GatewayConfigError,
+        GatewayServer,
+        load_gateway_config,
+        load_gateway_tenant,
+    )
+
+    config_path = Path(args.config) if args.config else Path(DEFAULT_GATEWAY_CONFIG_PATH)
+    try:
+        routes = load_gateway_config(config_path)
+    except GatewayConfigError as exc:
+        print(f"error: {exc}", file=err)
+        return ExitCode.ERROR
+    if not routes:
+        print(
+            f"error: no upstreams registered in {config_path}; "
+            "the gateway refuses to start as an open relay",
+            file=err,
+        )
+        return ExitCode.ERROR
+
+    bound_tenant = getattr(args, "tenant", None) or load_gateway_tenant(config_path)
+    active = storage.get_active_run()
+    run_id = args.run_id or (active.run_id if active else None)
+    server = GatewayServer(
+        lambda: open_storage(args.db), run_id, routes, port=args.port, bound_tenant=bound_tenant
+    )
+
+    pid_file = Path(args.pid_file) if args.pid_file else Path(".continuum/daemon.pid")
+
+    if args.detach:
+        pid = os.fork()
+        if pid > 0:
+            print(f"CONTINUUM daemon started (pid {pid})", file=out)
+            print(f"  pid file: {pid_file}", file=out)
+            print(f"  gateway: 127.0.0.1:{server.port}", file=out)
+            return ExitCode.OK
+        os.setsid()
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        pid_file.write_text(str(os.getpid()), encoding="utf-8")
+
+    print(
+        f"CONTINUUM daemon listening on 127.0.0.1:{server.port} "
+        f"({len(routes)} upstream route(s), run={run_id or 'dynamic'})",
+        file=err,
+    )
+    if args.detach:
+        print(f"  pid file: {pid_file}", file=err)
+
+    def _shutdown(signum: int, frame: Any) -> None:
+        server.shutdown()
+        if args.detach:
+            pid_file.unlink(missing_ok=True)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+        if args.detach:
+            pid_file.unlink(missing_ok=True)
+    return ExitCode.OK
+
+
+def _mcp_settings_path(args: argparse.Namespace) -> Path:
+    """The file a ``mcp install``/``mcp remove`` acts on, per host and scope."""
+    profile = MCP_HOST_PROFILES[args.host]
+    if args.settings:
+        return Path(args.settings)
+    if args.scope == "project":
+        return Path(profile["project_settings"])
+    if args.scope == "user":
+        return Path(profile["user_settings"]).expanduser()
+    return Path(profile["local_settings"]).expanduser()
+
+
+def cmd_mcp_install(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
+    """Register the MCP server with a host, baking resolved values (issue #834)."""
+    from continuum.mcp.install import (
+        INSTALL_COMMAND,
+        SERVER_NAME,
+        display_command,
+        install_server,
+        resolve_command,
+        verify_sdk,
+    )
+
+    command, form = resolve_command()
+    sdk_ok, detail = verify_sdk(form)
+    if not sdk_ok:
+        print(
+            f"error: the mcp SDK is not importable by {sys.executable} ({detail}). "
+            "Refusing to register a server that cannot start.",
+            file=err,
+        )
+        print(f"Install it with: {INSTALL_COMMAND}", file=err)
+        return ExitCode.ERROR
+
+    db = Path(args.db or Path.cwd() / "continuum.db").resolve()
+    settings_path = _mcp_settings_path(args)
+    try:
+        status = install_server(
+            settings_path,
+            scope=args.scope,
+            project_root=Path.cwd(),
+            command=command,
+            db=db,
+            host=args.host,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=err)
+        return ExitCode.ERROR
+
+    lines = [
+        f"MCP server registered with {args.host} ({args.scope} scope)",
+        f"  [{status}] {SERVER_NAME} in {settings_path}",
+        f"    command: {display_command([*command, '--db', str(db)])}",
+        f"    form: {form} (resolved at install time, independent of the host's PATH)",
+    ]
+    _emit(
+        {
+            "host": args.host,
+            "scope": args.scope,
+            "settings": str(settings_path),
+            "server": SERVER_NAME,
+            "status": status,
+            "command": command,
+            "db": str(db),
+            "form": form,
+        },
+        "\n".join(lines),
+        as_json=args.json,
+        stream=out,
+        palette=getattr(args, "_palette", None),
+    )
+    return ExitCode.OK
+
+
+def cmd_mcp_remove(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
+    """Remove the MCP registration ``mcp install`` wrote (issue #834)."""
+    from continuum.mcp.install import SERVER_NAME, remove_server
+
+    settings_path = _mcp_settings_path(args)
+    try:
+        removed = remove_server(settings_path, scope=args.scope, project_root=Path.cwd())
+    except ValueError as exc:
+        print(f"error: {exc}", file=err)
+        return ExitCode.ERROR
+    text = (
+        f"Removed {SERVER_NAME} from {settings_path}"
+        if removed
+        else f"No CONTINUUM-registered {SERVER_NAME} in {settings_path}"
+    )
+    _emit(
+        {
+            "host": args.host,
+            "scope": args.scope,
+            "settings": str(settings_path),
+            "server": SERVER_NAME,
+            "removed": removed,
+        },
+        text,
+        as_json=args.json,
+        stream=out,
+        palette=getattr(args, "_palette", None),
+    )
+    return ExitCode.OK
+
+
+def _mcp_timeout(value: str) -> float:
+    try:
+        timeout = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a usable timeout") from exc
+    if not (timeout == timeout and timeout > 0 and timeout < float("inf")):
+        raise argparse.ArgumentTypeError(f"{value!r} is not a usable timeout")
+    return timeout
+
+
+def cmd_mcp_doctor(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
+    """Diagnose why a host cannot connect to the MCP server."""
+    from continuum.mcp.doctor import render_doctor, run_doctor
+
+    report = run_doctor(timeout=args.timeout)
+    text = render_doctor(report)
+    _emit(report, text, as_json=args.json, stream=out, palette=getattr(args, "_palette", None))
+    return ExitCode.OK if report["healthy"] else ExitCode.ERROR
+
+
 def cmd_hooks_install(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
     """Wire a coding CLI's tool events into observe (and optionally gate).
 
@@ -3276,6 +3233,46 @@ def cmd_hooks_install(args: argparse.Namespace, storage: Storage, out: Any, err:
 
     briefing_command = command[: -len("observe")] + "briefing"
     precompact_command = command[: -len("observe")] + "precompact"
+    # --with-gate is a request for enforcement, and enforcement is the one
+    # thing this flag cannot fake. The installed hook resolves the same
+    # DEFAULT_GATE_CONFIG_PATH the gate command does, and the gate treats a
+    # *missing* registry as "no gate configured": Decision(True), exit 0 for an
+    # unclaimed side-effecting call. Wiring the hook in that state installs a
+    # guard that looks armed and disarms itself, which is worse than no guard
+    # at all. The README's onboarding promise, that unclaimed side effects
+    # registered in .continuum/gate.json are refused before they fire, reads as
+    # active to everyone who passes the flag while every call is allowed. Fail
+    # before touching settings, the way the gateway refuses to start as an open
+    # relay rather than forwarding everything. Re-running is idempotent
+    # (install_client_hook reports "present"), so the cost is one command.
+    if getattr(args, "with_gate", False):
+        registry = Path(DEFAULT_GATE_CONFIG_PATH)
+        try:
+            tools = load_gate_config(registry)
+        except GateConfigError as exc:
+            print(f"error: --with-gate needs a readable gate registry: {exc}", file=err)
+            return ExitCode.ERROR
+        if tools is None:
+            print(
+                f"error: --with-gate was passed but {registry} does not exist, so the "
+                "installed gate would allow every tool call: the gate reads a missing "
+                'registry as "no gate configured" and returns exit 0. Create one, '
+                "register your side-effecting tools, then re-run this command:\n"
+                "  mkdir -p .continuum && echo "
+                '\'{"tools": {"Write": {"key_template": "{file_path}"}}}\' '
+                f"> {registry}\n"
+                "Each entry names the tool as the harness sees it and the key template "
+                "that identifies the operation; see docs/guides/embed-claude-code.md "
+                "and docs/guides/memory_governance.md.",
+                file=err,
+            )
+            return ExitCode.ERROR
+        if not tools:
+            print(
+                f"warning: {registry} registers no tools, so the installed gate will "
+                'allow every call until you add entries under "tools".',
+                file=err,
+            )
     statuses = [
         (
             install_client_hook(
@@ -3449,95 +3446,162 @@ def cmd_hooks_remove(args: argparse.Namespace, storage: Storage, out: Any, err: 
     return ExitCode.OK
 
 
-def _mcp_settings_path(args: argparse.Namespace) -> Path:
-    """The file a ``mcp install``/``mcp remove`` acts on, per host and scope."""
-    profile = MCP_HOST_PROFILES[args.host]
-    if args.settings:
-        return Path(args.settings)
-    if args.scope == "project":
-        return Path(profile["project_settings"])
-    return Path(profile["local_settings"]).expanduser()
+def _agents_targets(args: argparse.Namespace) -> list[str]:
+    """The target ids one ``agents`` subcommand should act on.
 
-
-def cmd_mcp_install(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
-    """Register the MCP server with a host, baking resolved values (issue #834).
-
-    The committed ``.mcp.json`` cannot carry platform conditionals, and a bare
-    command name is resolved against the *host's* PATH by ``CreateProcess``,
-    which is how a healthy install surfaces as ``CONNECTION_CLOSED``. So the
-    command is resolved here, on the machine that will spawn it, and baked
-    absolute alongside an absolute ``--db`` (the host's spawn cwd is not the
-    project root and is not guaranteed to be). The ``mcp`` extra is verified
-    by spawning a probe subprocess before anything is written: an in-process
-    import check passes in exactly the states where the baked command would be
-    dead for the host.
+    ``--all`` is the shorthand for every registered target. It is resolved
+    here rather than in the parser so the registry stays the single list: a
+    target added to ``TARGETS`` is reachable by ``--all`` with no second edit.
     """
-    from continuum.mcp.install import (
-        INSTALL_COMMAND,
-        SERVER_NAME,
-        display_command,
-        install_server,
-        resolve_command,
-        verify_sdk,
-    )
 
-    command, form = resolve_command()
-    sdk_ok, detail = verify_sdk(form)
-    if not sdk_ok:
-        print(
-            f"error: the mcp SDK is not importable by {sys.executable} ({detail}). "
-            "Refusing to register a server that cannot start.",
-            file=err,
-        )
-        print(f"Install it with: {INSTALL_COMMAND}", file=err)
-        return ExitCode.ERROR
+    if getattr(args, "all_targets", False):
+        from continuum.agents import TARGET_IDS
 
-    # Absolute on purpose: every config path in the codebase resolves against
-    # the cwd, and the host's spawn cwd is neither documented nor guaranteed
-    # to be the project root.
-    db = Path(args.db or Path.cwd() / "continuum.db").resolve()
-    settings_path = _mcp_settings_path(args)
+        return list(TARGET_IDS)
+    return [args.target]
+
+
+def cmd_agents_install(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
+    """Render the instruction targets an IDE reads, from one source.
+
+    Refusing a target that exists and is not ours is deliberate and is not
+    an error path to be smoothed over: a hand-authored AGENTS.md is a
+    statement of intent, and overwriting it to save a reformat is the one
+    outcome this command must never produce.
+    """
+
+    from continuum.agents import REGENERATE_COMMAND, resolve_source
+    from continuum.agents import install as install_target
+
+    source = Path(args.source) if args.source else None
     try:
-        status = install_server(
-            settings_path,
-            scope=args.scope,
-            project_root=Path.cwd(),
-            command=command,
-            db=db,
-            host=args.host,
-        )
-    except ValueError as exc:
+        source_path, _ = resolve_source(source)
+    except FileNotFoundError as exc:
         print(f"error: {exc}", file=err)
         return ExitCode.ERROR
 
-    lines = [
-        f"MCP server registered with {args.host} ({args.scope} scope)",
-        f"  [{status}] {SERVER_NAME} in {settings_path}",
-        f"    command: {display_command([*command, '--db', str(db)])}",
-        f"    form: {form} (resolved at install time, independent of the host's PATH)",
-    ]
-    # The host reports a conflicting-scopes diagnostic when a local entry and
-    # the committed .mcp.json both name the server. That is expected: local
-    # wins, which is the point of registering there. Saying so here keeps the
-    # operator from "fixing" it by unregistering everyone else's entry.
-    conflict = args.scope == "local" and _project_mcp_json_names_server()
-    if conflict:
-        lines.append(
-            "  note: a project .mcp.json also registers this server; the local entry "
-            "takes precedence and the host's conflicting-scopes notice is expected"
-        )
+    results, refused = [], []
+    for target_id in _agents_targets(args):
+        try:
+            results.append(install_target(target_id, root=Path.cwd(), source=source))
+        except ValueError as exc:
+            refused.append(str(exc))
+
+    payload = {
+        "command": f"{REGENERATE_COMMAND} --target {args.target}",
+        "source": str(source_path),
+        "installed": [
+            {"target": r.target.id, "path": str(r.path), "status": r.status} for r in results
+        ],
+        "refused": refused,
+    }
+    lines = [f"Instruction targets rendered from {source_path}:"]
+    for r in results:
+        lines.append(f"  [{r.status}] {r.target.path}")
+    for message in refused:
+        lines.append(f"  [refused] {message}")
     _emit(
-        {
-            "host": args.host,
-            "scope": args.scope,
-            "settings": str(settings_path),
-            "server": SERVER_NAME,
-            "status": status,
-            "command": command,
-            "db": str(db),
-            "form": form,
-            "project_conflict": conflict,
-        },
+        payload,
+        "\n".join(lines),
+        as_json=args.json,
+        stream=out,
+        palette=getattr(args, "_palette", None),
+    )
+    return ExitCode.ERROR if refused and not results else ExitCode.OK
+
+
+def cmd_agents_remove(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
+    """Delete only the instruction targets this generator wrote.
+
+    A target the generator did not write is reported as left alone rather
+    than removed: the fingerprint is what makes ``remove`` a narrow command
+    instead of an ``rm`` with a nicer name.
+    """
+
+    from continuum.agents import TARGETS
+    from continuum.agents import remove as remove_target
+
+    removed, kept = [], []
+    for target_id in _agents_targets(args):
+        if remove_target(target_id, root=Path.cwd()):
+            removed.append(TARGETS[target_id].path)
+        else:
+            kept.append(TARGETS[target_id].path)
+
+    payload = {
+        "command": f"continuum agents remove --target {args.target}",
+        "removed": removed,
+        "left_alone": kept,
+    }
+    lines = []
+    for path in removed:
+        lines.append(f"removed {path}")
+    for path in kept:
+        lines.append(f"left alone (not written by this generator): {path}")
+    _emit(
+        payload,
+        "\n".join(lines) or "nothing to remove",
+        as_json=args.json,
+        stream=out,
+        palette=getattr(args, "_palette", None),
+    )
+    return ExitCode.OK
+
+
+def cmd_agents_check(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
+    """Fail when a committed target no longer matches the source it came from.
+
+    CORRUPTED is the right code: the file exists, carries our fingerprint,
+    and no longer agrees with what that fingerprint claims, which is the
+    same shape as any other failed integrity check in this codebase. An
+    unmanaged target is a conflict rather than corruption and is reported
+    without failing, since nothing this command owns is wrong.
+    """
+
+    from continuum.agents import check as check_target
+
+    source = Path(args.source) if args.source else None
+    try:
+        results = [check_target(t, root=Path.cwd(), source=source) for t in _agents_targets(args)]
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=err)
+        return ExitCode.ERROR
+
+    payload = {
+        "command": "continuum agents check",
+        "clean": all(r.state in ("current", "absent", "unmanaged") for r in results),
+        "targets": [
+            {"target": r.target.id, "path": str(r.path), "state": r.state, "detail": r.detail}
+            for r in results
+        ],
+    }
+    lines = [
+        f"{r.target.path}: {r.state}" + (f" ({r.detail})" if r.state != "current" else "")
+        for r in results
+    ]
+    _emit(
+        payload,
+        "\n".join(lines),
+        as_json=args.json,
+        stream=out,
+        palette=getattr(args, "_palette", None),
+    )
+    return ExitCode.OK if payload["clean"] else ExitCode.CORRUPTED
+
+
+def cmd_agents_list(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
+    """List the instruction targets and what each IDE reads."""
+
+    from continuum.agents import TARGETS
+
+    payload = {
+        "command": "continuum agents list",
+        "targets": [{"id": t.id, "path": t.path, "summary": t.summary} for t in TARGETS.values()],
+    }
+    lines = ["Instruction targets:"]
+    lines += [f"  {t.id:<15} {t.path:<34} {t.summary}" for t in TARGETS.values()]
+    _emit(
+        payload,
         "\n".join(lines),
         as_json=args.json,
         stream=out,
@@ -3546,52 +3610,53 @@ def cmd_mcp_install(args: argparse.Namespace, storage: Storage, out: Any, err: A
     return ExitCode.OK
 
 
-def _project_mcp_json_names_server() -> bool:
-    """True when a project-scope ``.mcp.json`` in the cwd registers the server."""
-    from continuum.mcp.install import SERVER_NAME
+def cmd_doctor(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
+    """Report whether CONTINUUM works in the IDE this shell is sitting in.
 
-    try:
-        data = json.loads(Path(".mcp.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    servers = data.get("mcpServers") if isinstance(data, dict) else None
-    return isinstance(servers, dict) and SERVER_NAME in servers
+    Exit codes reuse the existing vocabulary rather than adding near-duplicates
+    to it, because the meanings map onto it exactly:
 
-
-def cmd_mcp_remove(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
-    """Remove the MCP registration ``mcp install`` wrote (issue #834).
-
-    Only an entry this command's shape recognises is touched: the committed
-    ``.mcp.json`` registration and anything hand-registered survive, so an
-    uninstall can never unplug the server for other users of the same clone.
+    * OK when every wired IDE is current and authorized. An IDE with nothing
+      configured is not a failure and never blocks a pipeline.
+    * REQUIRES_REPAIR when a registration bakes a path that no longer
+      resolves. Re-running ``continuum mcp install`` fixes it unaided, which
+      is precisely what that code documents.
+    * REQUIRES_HUMAN when any client is read-only-degraded. Re-baking the path
+      does not grant the permission, and granting it automatically is the
+      failure the authorization layer exists to prevent. Degradation outranks
+      staleness for this reason: a pipeline that only retried on
+      REQUIRES_REPAIR would loop forever.
+    * UNSAFE for anything unclassified, so an unrecognised state can never be
+      mistaken for permission to proceed.
     """
-    from continuum.mcp.install import SERVER_NAME, remove_server
 
-    settings_path = _mcp_settings_path(args)
+    from continuum.agents import diagnose
+
     try:
-        removed = remove_server(settings_path, scope=args.scope, project_root=Path.cwd())
-    except ValueError as exc:
+        report = diagnose.scan(
+            root=Path(args.root) if args.root else None,
+            home=Path(args.home) if args.home else None,
+            deep=args.deep,
+            timeout=args.timeout,
+        )
+    except OSError as exc:
         print(f"error: {exc}", file=err)
         return ExitCode.ERROR
-    text = (
-        f"Removed {SERVER_NAME} from {settings_path}"
-        if removed
-        else f"No CONTINUUM-registered {SERVER_NAME} in {settings_path}"
-    )
+
     _emit(
-        {
-            "host": args.host,
-            "scope": args.scope,
-            "settings": str(settings_path),
-            "server": SERVER_NAME,
-            "removed": removed,
-        },
-        text,
+        report.to_dict(),
+        diagnose.render_report(report),
         as_json=args.json,
         stream=out,
         palette=getattr(args, "_palette", None),
     )
-    return ExitCode.OK
+    if report.healthy:
+        return ExitCode.OK
+    if report.degraded:
+        return ExitCode.REQUIRES_HUMAN
+    if report.stale:
+        return ExitCode.REQUIRES_REPAIR
+    return ExitCode.UNSAFE
 
 
 def cmd_gate(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
@@ -3730,6 +3795,7 @@ def cmd_reconcile_auto(args: argparse.Namespace, storage: Storage, out: Any, err
     un-settles what a probe decided, only advises on what it left open.
     """
     from continuum.actions.ledger import ActionLedger
+    from continuum.plugins import ReconciliationOutcome, settle_with_reconcilers
     from continuum.reconcilers import (
         DEFAULT_RECONCILERS_PATH,
         ReconcilerConfigError,
@@ -3788,6 +3854,12 @@ def cmd_reconcile_auto(args: argparse.Namespace, storage: Storage, out: Any, err
         )
         return ExitCode.OK if authority_report.valid is True else ExitCode.REQUIRES_HUMAN
 
+    plugin_report = (
+        settle_with_reconcilers(storage, args.run_id, plugins, dry_run=args.dry_run)
+        if plugins
+        else None
+    )
+
     pending = ActionLedger(storage, args.run_id).pending()
     report = settle_run(storage, args.run_id, probes, dry_run=args.dry_run, strict=args.strict)
     # Discrepancy pass (issue #268): evidence that contradicts the ledger is a
@@ -3803,6 +3875,8 @@ def cmd_reconcile_auto(args: argparse.Namespace, storage: Storage, out: Any, err
         **report.as_dict(),
         "discrepancies": [d.as_dict() for d in discrepancies],
     }
+    if plugin_report is not None:
+        payload["plugins"] = plugin_report.as_dict()
     lines = [
         f"pending actions: {len(pending)}, "
         f"settled: {report.settled} "
@@ -3810,6 +3884,20 @@ def cmd_reconcile_auto(args: argparse.Namespace, storage: Storage, out: Any, err
         f"unresolved: {len(report.unresolved)}, "
         f"no probe registered: {len(report.skipped_no_probe)}"
     ]
+    if plugin_report is not None:
+        lines.append(f"plugin reconcilers: {len(plugins)} registered")
+        lines.append(
+            f"settled: {plugin_report.settled} "
+            f"(occurred {len(plugin_report.settled_true)}, not-occurred {len(plugin_report.settled_false)})"
+        )
+        for item in plugin_report.assessments:
+            if item.outcome in (
+                ReconciliationOutcome.CONFIRMED_OCCURRED,
+                ReconciliationOutcome.CONFIRMED_NOT_OCCURRED,
+            ):
+                lines.append(f"  [ok] {item.action_type}: {item.reason}")
+            else:
+                lines.append(f"  [!!] {item.action_type}: {item.reason}")
     for action_type, detail in report.unresolved:
         lines.append(f"  [!!] {action_type}: {detail}")
     for finding in discrepancies:
@@ -3824,6 +3912,12 @@ def cmd_reconcile_auto(args: argparse.Namespace, storage: Storage, out: Any, err
         palette=getattr(args, "_palette", None),
     )
     remaining = len(pending) - report.settled
+    if plugin_report is not None:
+        if args.dry_run:
+            return ExitCode.OK
+        if plugin_report.escalated:
+            return ExitCode.REQUIRES_HUMAN
+        remaining -= plugin_report.settled
     if discrepancies:
         return ExitCode.REQUIRES_HUMAN
     return ExitCode.OK if remaining <= 0 else ExitCode.REQUIRES_HUMAN
@@ -4192,7 +4286,7 @@ def cmd_replay(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -
             matches = state_fingerprint(at_stored) == state_fingerprint(stored)
             where = f"checkpoint v{stored.version} at sequence {stored.source_sequence}"
             verification = (
-                f"anchored run: {'matches' if matches else 'DOES NOT match'} stored {where}; "
+                f"anchored run: {'matches stored version' if matches else 'DOES NOT match stored version'} at {where}; "
                 f"{len(tail)} tail event(s) folded, prefix audited in events_archive"
             )
             payload = {
@@ -4205,7 +4299,8 @@ def cmd_replay(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -
             }
             _emit(
                 payload,
-                f"Anchored replay: folded {where} + {len(tail)} tail event(s)\n"
+                f"Replayed {len(events)} events -> {state.progress.completed} completed, "
+                f"{len(state.decisions)} decision(s), {len(state.findings)} finding(s)\n"
                 f"Verification: {verification}",
                 as_json=args.json,
                 stream=out,
@@ -4715,7 +4810,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the version and exit.",
     )
     parser.add_argument(
-        "--db", default=_DEFAULT_DB, help=f"storage URL or path (default: {_DEFAULT_DB})."
+        "--db",
+        default=_default_db(),
+        help=f"storage URL or path (default: {_default_db()}).",
     )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON.")
     colour = parser.add_mutually_exclusive_group()
@@ -4859,14 +4956,19 @@ def build_parser() -> argparse.ArgumentParser:
     # health is advisory only; it never gates, never moves mode, never changes exit code
     # (issue #401). It reports trust_score with per-dimension breakdown.
 
-    providers = add(
-        "providers",
-        cmd_providers,
-        "Configure the environment providers a run trusts at resume. Mutates storage.",
+    # The analyser folds the archive alongside the live log, so it stays correct
+    # after compaction (issue #1427).
+    report = with_run(add("report", cmd_report, "Analyse a run's history. Read-only."))
+    report.add_argument(
+        "--trajectory",
+        action="store_true",
+        help="distil claims, uncertain side effects, scar rate and stall sites "
+        "from the archive and the active log.",
     )
     # ``--json`` reaches this subparser through ``json_parent`` like every
     # other one; the #677 SUPPRESS default it needed already lives there, so
     # re-adding it here raised a conflicting-option error.
+
     resume = with_env(add("resume", cmd_resume, "Decide how a run may resume."))
     resume.add_argument(
         "run_id",
@@ -5055,6 +5157,177 @@ def build_parser() -> argparse.ArgumentParser:
         help="read the hook payload from this file instead of stdin.",
     )
 
+    mcp = add("mcp", cmd_mcp_install, "Register the MCP server with a host.")
+    mcp_sub = mcp.add_subparsers(dest="mcp_command", metavar="ACTION", required=True)
+
+    def mcp_options(p: argparse.ArgumentParser, func: Any) -> None:
+        p.add_argument(
+            "--host",
+            choices=tuple(MCP_HOST_PROFILES),
+            default="claude-code",
+            help="which host to configure (claude-code, gemini, cursor, vscode).",
+        )
+        p.add_argument(
+            "--scope",
+            choices=("local", "project", "user"),
+            default="local",
+            help=(
+                "where to register: 'local' is the per-user file for this project "
+                "(default, wins over the committed .mcp.json); 'project' is the "
+                "shared .mcp.json in the project root; 'user' is the global "
+                "user config that applies to all projects."
+            ),
+        )
+        p.add_argument(
+            "--settings",
+            default=None,
+            help="path to the host's settings file (default: per host and scope).",
+        )
+        p.set_defaults(func=func)
+
+    mcp_install = mcp_sub.add_parser(
+        "install", help="Register the MCP server. Mutates host config."
+    )
+    mcp_install.add_argument(
+        "--db",
+        default=None,
+        help="database path to bake, stored absolute (default: ./continuum.db).",
+    )
+    mcp_options(mcp_install, cmd_mcp_install)
+
+    mcp_remove = mcp_sub.add_parser(
+        "remove", help="Remove the registration mcp install wrote. Mutates host config."
+    )
+    mcp_options(mcp_remove, cmd_mcp_remove)
+
+    mcp_doctor = mcp_sub.add_parser("doctor", help="Diagnose MCP connection failures.")
+    mcp_doctor.add_argument(
+        "--timeout",
+        type=_mcp_timeout,
+        default=15.0,
+        help="handshake read timeout in seconds (default: 15).",
+    )
+    mcp_doctor.set_defaults(func=cmd_mcp_doctor)
+
+    agents = add("agents", cmd_agents_list, "Render IDE instruction targets from one source.")
+    agents_sub = agents.add_subparsers(dest="agents_command", metavar="ACTION", required=True)
+
+    def agents_options(p: argparse.ArgumentParser, func: Any) -> None:
+        """Give an ``agents`` action its target selector and source override.
+
+        ``--all`` is resolved against the registry at call time rather than
+        expanded into one flag per target, so a new IDE is reachable by
+        ``--all`` the moment it is registered.
+        """
+
+        from continuum.agents import TARGET_IDS
+
+        p.add_argument(
+            "--target",
+            default=TARGET_IDS[0],
+            choices=tuple(TARGET_IDS),
+            help="which instruction file to write (default: agents).",
+        )
+        p.add_argument(
+            "--all",
+            dest="all_targets",
+            action="store_true",
+            help="act on every registered target.",
+        )
+        p.add_argument(
+            "--source",
+            default=None,
+            help="instruction source to render (default: the shipped instructions.md).",
+        )
+        p.set_defaults(func=func)
+
+    agents_install = agents_sub.add_parser(
+        "install", help="Render instruction targets. Refuses to overwrite a hand-written file."
+    )
+    agents_options(agents_install, cmd_agents_install)
+
+    agents_remove = agents_sub.add_parser(
+        "remove", help="Remove only the targets this generator wrote. Mutates the tree."
+    )
+    agents_options(agents_remove, cmd_agents_remove)
+
+    agents_check = agents_sub.add_parser(
+        "check", help="Fail when a committed target no longer matches its source."
+    )
+    agents_options(agents_check, cmd_agents_check)
+
+    agents_list = agents_sub.add_parser(
+        "list", help="List the instruction targets and their files."
+    )
+    agents_list.set_defaults(func=cmd_agents_list)
+
+    doctor_cmd = add(
+        "doctor",
+        cmd_doctor,
+        "Report whether CONTINUUM works in the IDE you are in right now.",
+    )
+    doctor_cmd.add_argument(
+        "--deep",
+        action="store_true",
+        help=(
+            "also run the MCP server's own handshake checks (mcp doctor). Each "
+            "one spawns a subprocess, so this is slower than the default scan."
+        ),
+    )
+    doctor_cmd.add_argument(
+        "--timeout",
+        type=_mcp_timeout,
+        default=15.0,
+        help="handshake read timeout in seconds for --deep (default: 15).",
+    )
+    doctor_cmd.add_argument(
+        "--root",
+        default=None,
+        help="project root to scan (default: the current directory).",
+    )
+    doctor_cmd.add_argument(
+        "--home",
+        default=None,
+        help="home directory to expand ~ against (default: the real home).",
+    )
+
+    daemon_cmd = add(
+        "daemon",
+        cmd_daemon,
+        "Run CONTINUUM as a background daemon (gateway).",
+    )
+    daemon_cmd.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="gateway port (default: 8765).",
+    )
+    daemon_cmd.add_argument(
+        "--config",
+        default=None,
+        help="gateway config path (default: .continuum/gateway.json).",
+    )
+    daemon_cmd.add_argument(
+        "--tenant",
+        default=None,
+        help="tenant bound to the gateway.",
+    )
+    daemon_cmd.add_argument(
+        "--run-id",
+        default=None,
+        help="run ID to bind (default: active run).",
+    )
+    daemon_cmd.add_argument(
+        "--detach",
+        action="store_true",
+        help="fork into the background and write a PID file.",
+    )
+    daemon_cmd.add_argument(
+        "--pid-file",
+        default=None,
+        help="PID file path (default: .continuum/daemon.pid).",
+    )
+
     gateway_cmd = add(
         "gateway",
         cmd_gateway,
@@ -5184,49 +5457,6 @@ def build_parser() -> argparse.ArgumentParser:
         "remove", help="Remove every hook install wired. Mutates settings."
     )
     hooks_client(remove, cmd_hooks_remove)
-
-    mcp = add("mcp", cmd_mcp_install, "Register the MCP server with a host.")
-    mcp_sub = mcp.add_subparsers(dest="mcp_command", metavar="ACTION", required=True)
-
-    def mcp_options(p: argparse.ArgumentParser, func: Any) -> None:
-        """Give a ``mcp`` action its host, scope and settings override."""
-        p.add_argument(
-            "--host",
-            choices=tuple(MCP_HOST_PROFILES),
-            default="claude-code",
-            help="which host to configure (claude-code).",
-        )
-        p.add_argument(
-            "--scope",
-            choices=("local", "project"),
-            default="local",
-            help=(
-                "where to register: 'local' is the per-user file for this project "
-                "(default, wins over the committed .mcp.json); 'project' is the "
-                "shared .mcp.json in the project root."
-            ),
-        )
-        p.add_argument(
-            "--settings",
-            default=None,
-            help="path to the host's settings file (default: per host and scope).",
-        )
-        p.set_defaults(func=func)
-
-    mcp_install = mcp_sub.add_parser(
-        "install", help="Register the MCP server. Mutates host config."
-    )
-    mcp_install.add_argument(
-        "--db",
-        default=None,
-        help="database path to bake, stored absolute (default: ./continuum.db).",
-    )
-    mcp_options(mcp_install, cmd_mcp_install)
-
-    mcp_remove = mcp_sub.add_parser(
-        "remove", help="Remove the registration mcp install wrote. Mutates host config."
-    )
-    mcp_options(mcp_remove, cmd_mcp_remove)
 
     verify = with_run(add("verify", cmd_verify, "Re-audit the event chain."))
     verify.add_argument(
@@ -5537,10 +5767,8 @@ def main(
     if getattr(args, "func", None) is None:
         return _bare_invocation(parser, args, out, err)
 
-    # hooks, notify-test and mcp registration never touch a run, so they must
-    # not create an empty database as a side effect (of editing a settings
-    # file, sending a test notification, or of writing an `.mcp.json` entry
-    # without a run to attach it to).
+    # hooks never touches a run, so it must not create an empty database as a
+    # side effect of editing a settings file.
     if args.command in (
         "benchmark",
         "attest-keygen",
@@ -5548,7 +5776,19 @@ def main(
         "hooks",
         "notify-test",
         "mcp",
+        "daemon",
+        # Both read config files and write instruction targets; neither opens
+        # a run, so neither may create an empty database as a side effect of
+        # checking whether a host is wired up.
+        "agents",
+        "doctor",
     ):
+        return int(args.func(args, None, out, err))
+
+    # A lineage token can be checked with no access to the source store at all:
+    # without a run_id there is nothing to read, and opening storage would only
+    # risk creating an empty database as a side effect of a read-only check.
+    if args.command == "lineage-verify" and not getattr(args, "run_id", None):
         return int(args.func(args, None, out, err))
 
     # Instant resume detection (issue #394): SessionStart hook reads

@@ -157,6 +157,22 @@ class Storage(ABC):
         """
         raise NotImplementedError
 
+    def _anchor_environment(
+        self, run_id: str, environment: EnvironmentSnapshot | None
+    ) -> EnvironmentSnapshot | None:
+        """The environment a forced anchor should record (#1049).
+
+        A caller-supplied snapshot wins. Without one the newest checkpoint's
+        recorded environment is carried forward: compaction observes the world,
+        it does not change it, so the last verified environment is the one the
+        boundary represents. ``None`` only survives when the run has no
+        checkpoint to inherit from, in which case there is nothing to carry.
+        """
+        if environment is not None:
+            return environment
+        prior = self.latest_checkpoint(run_id)
+        return prior.environment if prior is not None else None
+
     def _validate_compaction_bound(
         self, through_sequence: int | None, anchor_sequence: int
     ) -> None:
@@ -176,8 +192,18 @@ class Storage(ABC):
                 f" at sequence {anchor_sequence}: the live log must retain its anchor"
             )
 
-    def read_archived_events(self, run_id: str, *, upto: int | None = None) -> Sequence[Event]:
+    def read_archived_events(
+        self,
+        run_id: str,
+        *,
+        upto: int | None = None,
+        rehydrate: bool = True,
+    ) -> Sequence[Event]:
         """Read events moved into ``events_archive``, oldest first.
+
+        ``rehydrate`` forwards to the engine's payload rehydration path, so a
+        caller can inspect the raw offload descriptor instead of the blob it
+        names.
 
         Engines without an archive return an empty sequence, so a caller that
         wants "the whole recorded history" can concatenate this with
@@ -190,10 +216,16 @@ class Storage(ABC):
         it. Compaction exists to bound replay cost; an unbounded archive read
         would undo that.
         """
-        del run_id, upto
+        del run_id, upto, rehydrate
         return []
 
-    def read_all_events(self, run_id: str, *, upto: int | None = None) -> Sequence[Event]:
+    def read_all_events(
+        self,
+        run_id: str,
+        *,
+        upto: int | None = None,
+        rehydrate: bool = True,
+    ) -> Sequence[Event]:
         """Full history including archived prefix, sorted by sequence.
 
         After compaction the live log holds only the anchor and tail; any
@@ -216,8 +248,8 @@ class Storage(ABC):
         keeps a windowed caller (``replay --upto``) from loading a month of
         archived history to look at its first event.
         """
-        archived = list(self.read_archived_events(run_id, upto=upto))
-        live = list(self.read_events(run_id, upto=upto))
+        archived = list(self.read_archived_events(run_id, upto=upto, rehydrate=rehydrate))
+        live = list(self.read_events(run_id, upto=upto, rehydrate=rehydrate))
         if not archived:
             return live
         if not live:
