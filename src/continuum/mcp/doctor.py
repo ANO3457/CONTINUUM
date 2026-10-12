@@ -110,6 +110,27 @@ _REFUSAL_MARKERS = (
 #: rather than whatever the operator's shell happened to export.
 _POLICY_ENV_VARS = frozenset({POLICY_ENV_VAR, POLICY_ENV_VAR_ALIAS})
 
+#: Variables that decide how the interpreter itself starts. A registration is
+#: data from a file in a checkout, so these are never read out of one: see
+#: :func:`_probe_environment`.
+_INTERPRETER_ENV_VARS = frozenset(
+    {
+        # Python startup and search path.
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "PYTHONUSERBASE",
+        "PYTHONEXECUTABLE",
+        # Dynamic loader. These precede anything Python gets to check.
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "LD_AUDIT",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FRAMEWORK_PATH",
+    }
+)
+
 #: Probe code for check 1: import the SDK in a fresh interpreter. The version
 #: print is best-effort metadata, not a requirement -- a working SDK without
 #: install metadata is still a working SDK.
@@ -735,9 +756,24 @@ def _probe_environment(registration: dict[str, Any]) -> dict[str, str]:
     is the silent failure this check exists to end. ``PATH`` and
     ``PYTHONPATH`` are untouched: the child still has to be spawnable and
     importable for the call to say anything at all.
+
+    A registration is data read from a file in a checkout, and it is never
+    allowed to decide how the interpreter starts. Interpreter and dynamic
+    loader variables are dropped from it, leaving this process's own values in
+    place. A ``PYTHONPATH`` written into a project config is otherwise read
+    back out of that same file and handed to the probe child, where a
+    ``sitecustomize.py`` beside it runs before the probe does anything at all.
+    Nothing about authorization needs those variables, so refusing them costs
+    the check nothing.
     """
     env = {key: value for key, value in os.environ.items() if key not in _POLICY_ENV_VARS}
-    env.update(_registration_env(registration))
+    env.update(
+        {
+            key: value
+            for key, value in _registration_env(registration).items()
+            if key not in _INTERPRETER_ENV_VARS
+        }
+    )
     return env
 
 

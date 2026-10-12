@@ -25,7 +25,7 @@ import pytest
 
 import continuum
 from continuum.cli import ExitCode, main
-from continuum.mcp import doctor
+from continuum.mcp import configfmt, doctor
 from continuum.mcp.doctor import (
     _check_handshake,
     _check_mutation_access,
@@ -37,6 +37,7 @@ from continuum.mcp.doctor import (
     render_doctor,
     run_doctor,
 )
+from continuum.mcp.install import HOST_PROFILES, SERVER_NAME, host_shape
 from continuum.mcp.observation import read_observed_clients, record_observed_client
 
 #: The ``src`` directory of whichever copy of continuum this session imported.
@@ -1187,6 +1188,61 @@ def test_the_probe_environment_does_not_carry_the_policy_in(
     assert env.get("PATH"), "the child still has to be spawnable"
 
 
+def test_a_registration_cannot_decide_how_the_interpreter_starts(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The probe spawns a real interpreter, so a config file cannot hand it one.
+
+    A registration is data read out of a file in a checkout, and the probe
+    re-read its environment and spawned the server with it. A ``PYTHONPATH``
+    written into a project config was therefore passed straight to the child,
+    where a ``sitecustomize.py`` beside it runs at interpreter startup before
+    the probe does anything at all. Running ``continuum mcp doctor`` in a
+    cloned repository was enough to execute whatever that repository chose.
+
+    These are dropped from the registration and this process's own values stay
+    in place, because the operator's interpreter is the one the probe means to
+    run. Authorization still comes from the registration, which is the only
+    thing the probe is reading it for.
+    """
+
+    _isolated_home(monkeypatch, tmp_path)
+    settings_path = _write_registration(tmp_path, "cursor")
+    data = json.loads(settings_path.read_text(encoding="utf-8"))
+    entry = data["mcpServers"][SERVER_NAME]
+    entry["env"].update(
+        {
+            "PYTHONPATH": "/tmp/attacker",
+            "PYTHONHOME": "/tmp/attacker",
+            "PYTHONSTARTUP": "/tmp/attacker/startup.py",
+            "LD_PRELOAD": "/tmp/attacker/evil.so",
+            "DYLD_INSERT_LIBRARIES": "/tmp/attacker/evil.dylib",
+        }
+    )
+    settings_path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setenv("PYTHONPATH", "/operator/value")
+    registration = {
+        "host": "cursor",
+        "settings_path": settings_path,
+        "scope": "project",
+        "project_root": tmp_path,
+        "baked_client": "cursor",
+    }
+
+    env = doctor._probe_environment(registration)
+
+    for name in (
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "LD_PRELOAD",
+        "DYLD_INSERT_LIBRARIES",
+    ):
+        assert env.get(name) != "/tmp/attacker", f"{name} came from the registration"
+    assert env.get("PYTHONPATH") == "/operator/value", "the operator's own value stays"
+    assert env["CONTINUUM_MCP_MUTATING_CLIENTS"] == "cursor", "authorization still comes through"
+
+
 def test_a_settings_file_the_doctor_cannot_parse_is_not_a_crash(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
@@ -1203,8 +1259,9 @@ def test_a_settings_file_the_doctor_cannot_parse_is_not_a_crash(
     assert find_registration(tmp_path) is None
 
 
+@pytest.mark.parametrize("host", tuple(HOST_PROFILES))
 def test_every_host_registration_is_found_and_its_env_is_read(
-    monkeypatch: Any, tmp_path: Path
+    monkeypatch: Any, tmp_path: Path, host: str
 ) -> None:
     """The probe has to see the registration it exists to check.
 
@@ -1224,63 +1281,62 @@ def test_every_host_registration_is_found_and_its_env_is_read(
     it verifies an unrelated file and reports the answer as ours.
     """
 
-    from continuum.mcp import configfmt
-    from continuum.mcp.install import HOST_PROFILES, SERVER_NAME, host_shape
+    profile = HOST_PROFILES[host]
+    # Only the format this host is written in can skip. A guard placed before
+    # the loop skipped the whole test in CI, which installs .[dev] without the
+    # optional writers, so the JSON hosts lost their coverage too and the
+    # regression this file exists to catch was not running anywhere.
+    if profile["format"] == "yaml":
+        pytest.importorskip("yaml")
+    elif profile["format"] == "toml":
+        pytest.importorskip("tomli_w")
+    root = tmp_path
+    _isolated_home(monkeypatch, root)
+    shape = host_shape(host)
+    spec = configfmt.ServerSpec(
+        SERVER_NAME,
+        (str(SCRIPTS_DIR / "continuum-mcp"), "--db", str(root / "continuum.db")),
+        {"CONTINUUM_MCP_MUTATING_CLIENTS": profile["mutating_clients"]},
+    )
+    data: dict[str, Any] = {}
+    shape.put(data, "project", root, spec)
 
-    pytest.importorskip("yaml")
-    pytest.importorskip("tomli_w")
-    for host, profile in HOST_PROFILES.items():
-        # A directory per host: each fixture is written into a project root
-        # that the next host must not inherit, and _isolated_home cannot
-        # recreate a home that already exists.
-        root = tmp_path / host
-        root.mkdir()
-        _isolated_home(monkeypatch, root)
-        shape = host_shape(host)
-        spec = configfmt.ServerSpec(
-            SERVER_NAME,
-            (str(SCRIPTS_DIR / "continuum-mcp"), "--db", str(root / "continuum.db")),
-            {"CONTINUUM_MCP_MUTATING_CLIENTS": profile["mutating_clients"]},
-        )
-        data: dict[str, Any] = {}
-        shape.put(data, "project", root, spec)
+    settings = root / profile["project_settings"]
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    if profile["format"] == "yaml":
+        import yaml
 
-        settings = root / profile["project_settings"]
-        settings.parent.mkdir(parents=True, exist_ok=True)
-        if profile["format"] == "yaml":
-            import yaml
+        settings.write_text(yaml.safe_dump(data), encoding="utf-8")
+    elif profile["format"] == "toml":
+        import tomli_w
 
-            settings.write_text(yaml.safe_dump(data), encoding="utf-8")
-        elif profile["format"] == "toml":
-            import tomli_w
+        settings.write_text(tomli_w.dumps(data), encoding="utf-8")
+    else:
+        settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-            settings.write_text(tomli_w.dumps(data), encoding="utf-8")
-        else:
-            settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-        registration = doctor.find_registration(root)
-        assert registration is not None, f"{host} registration was not found at all"
-        assert registration["settings_path"] == settings
-        # claude-code and gemini both register into .mcp.json, so a file that
-        # one host wrote is equally the other's and which name comes back
-        # depends on iteration order, not on the file. Every other host names
-        # a file of its own, and for those the name has to be the right one.
-        claimants = [
-            name
-            for name, other in HOST_PROFILES.items()
-            if other["project_settings"] == profile["project_settings"]
-        ]
-        assert registration["host"] in claimants, (
+    registration = doctor.find_registration(root)
+    assert registration is not None, f"{host} registration was not found at all"
+    assert registration["settings_path"] == settings
+    # claude-code and gemini both register into .mcp.json, so a file that
+    # one host wrote is equally the other's and which name comes back
+    # depends on iteration order, not on the file. Every other host names
+    # a file of its own, and for those the name has to be the right one.
+    claimants = [
+        name
+        for name, other in HOST_PROFILES.items()
+        if other["project_settings"] == profile["project_settings"]
+    ]
+    assert registration["host"] in claimants, (
+        f"{host} registration resolved to {registration['host']} at "
+        f"{registration['settings_path']}, which no profile names"
+    )
+    if len(claimants) == 1:
+        assert registration["host"] == host, (
             f"{host} registration resolved to {registration['host']} at "
-            f"{registration['settings_path']}, which no profile names"
+            f"{registration['settings_path']}"
         )
-        if len(claimants) == 1:
-            assert registration["host"] == host, (
-                f"{host} registration resolved to {registration['host']} at "
-                f"{registration['settings_path']}"
-            )
-        assert registration["baked_client"] == profile["mutating_clients"]
-        assert (
-            doctor._registration_env(registration).get("CONTINUUM_MCP_MUTATING_CLIENTS")
-            == profile["mutating_clients"]
-        ), f"{host} env was read through the wrong key"
+    assert registration["baked_client"] == profile["mutating_clients"]
+    assert (
+        doctor._registration_env(registration).get("CONTINUUM_MCP_MUTATING_CLIENTS")
+        == profile["mutating_clients"]
+    ), f"{host} env was read through the wrong key"
