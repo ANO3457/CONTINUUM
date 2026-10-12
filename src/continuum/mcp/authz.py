@@ -143,6 +143,10 @@ ALLOW_ANY_CLIENT = "*"
 #: committed registration is itself the warning.
 ALLOW_ANY_CLIENT_ENV_VAR = "CONTINUUM_MCP_ALLOW_ANY_CLIENT"
 
+#: Spellings that switch the wildcard on. Everything else is read as not set,
+#: so ``0`` and ``false`` mean what they say. See :func:`_opted_in`.
+_OPT_IN_VALUES = frozenset({"*", "1", "true", "yes", "on"})
+
 #: Used when the handshake supplied no client name at all.
 UNKNOWN_CALLER = "<unidentified>"
 
@@ -607,6 +611,26 @@ class AuthorizationPolicy:
         )
 
 
+def _opted_in(value: str | None) -> bool:
+    """Whether the wildcard environment variable was deliberately switched on.
+
+    The variable waives the client-name comparison and authorizes every named
+    caller to mutate, so it is read as a deliberate statement rather than as
+    presence. Reading it as presence meant ``CONTINUUM_MCP_ALLOW_ANY_CLIENT=0``
+    and ``=false`` switched on exactly what the operator wrote to switch off:
+    with an empty allowlist beside it, every client on the machine was
+    authorized. A value nobody can mistake for consent is an off.
+
+    Every affirmative spelling keeps working, including the ``*`` the docs
+    recommend and the ``1`` and ``yes`` the tests have always asserted. Only the
+    negative and unrecognised spellings are refused, and they are refused the
+    way the variable is meant to be read: not set.
+    """
+    if value is None:
+        return False
+    return value.strip().casefold() in _OPT_IN_VALUES
+
+
 def _from_env(value: str | None) -> list[str]:
     if not value:
         return []
@@ -678,7 +702,7 @@ def load_policy(
         return AuthorizationPolicy(allow, aliases=aliases, source="argument")
 
     environ = os.environ if env is None else env
-    if environ.get(ALLOW_ANY_CLIENT_ENV_VAR):
+    if _opted_in(environ.get(ALLOW_ANY_CLIENT_ENV_VAR)):
         return AuthorizationPolicy([ALLOW_ANY_CLIENT], source=ALLOW_ANY_CLIENT_ENV_VAR)
 
     declared = environ.get(ALIASES_ENV_VAR)
