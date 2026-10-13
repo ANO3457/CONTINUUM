@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Test counts: ~3,636 collected on a minimal env.
+Test counts: ~3680 collected on a minimal env.
 
 ### Added
 
@@ -52,6 +52,20 @@ Test counts: ~3,636 collected on a minimal env.
   scorer is shipped and tested on its own rather than arriving with a heuristic
   that moves while the queue is built.
 ### Fixed
+
+- **The documented test count is re-synced, so `main` builds again.** The
+  collected total had drifted to 3,680 against a documented 3,636, past the
+  30-test tolerance `test_documented_count_matches_suite` allows, so the
+  guard failed every test job on `main` and would fail on any branch adding
+  three or more tests for a reason that has nothing to do with the branch.
+  Every doc that states the total now states 3,680: `README.md`, the five
+  translated READMEs, `docs/CONTRIBUTING_ONBOARDING.md`, `docs/index.html`,
+  `references/install.md`, `references/testing.md`. Four phrasings that
+  contradicted the new figure on the same line are corrected with it, and one
+  of them is why the drift was invisible: `README.md` stated a collected
+  total in the form `3,636 collected` with no tilde, which no pattern in the
+  guard matches, so that line drifted with the suite while every guarded line
+  held.
 
 - **The read-only MCP tools say "no such run" for an unknown run id.**
   `continuum_validate`, `continuum_resume` and `continuum_list_actions` were
