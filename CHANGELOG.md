@@ -53,6 +53,15 @@ Test counts: ~3,636 collected on a minimal env.
   that moves while the queue is built.
 ### Fixed
 
+- **The read-only MCP tools say "no such run" for an unknown run id.**
+  `continuum_validate`, `continuum_resume` and `continuum_list_actions` were
+  not wrapped in `_refusal_reaches_the_caller`, so under mcp 2.1.0 a mistyped
+  id reached the caller as the bare `Error executing tool <name>`. They now
+  carry a `refusals` decorator that applies the same conversion, and
+  `continuum_validate` and `continuum_resume` look up the run row first so an
+  unknown id is refused as `RunNotFound` (as `continuum_list_actions` already
+  did) rather than as `run 'x' has no checkpoint and no events`.
+
 - **A probe that prints `occurred:false` is now told the separator is the
   problem.** A command probe's verdict contract was documented only in the
   module docstring, so the place an operator met it was the error, and the
