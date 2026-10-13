@@ -344,7 +344,7 @@ def _is_legacy_precompact_hook(hook: Mapping[str, Any]) -> bool:
         tokens = _split_command(command)
     except ValueError:
         return False
-    return "continuum.cli" in tokens or any(Path(token).stem == "continuum" for token in tokens)
+    return "continuum.cli" in tokens or any(_command_stem(token) == "continuum" for token in tokens)
 
 
 def _is_continuum_hook(hook: Mapping[str, Any], kind: str) -> bool:
