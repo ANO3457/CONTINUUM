@@ -84,8 +84,8 @@ uv venv && source .venv/bin/activate     # macOS / Linux; Windows: .venv\Scripts
 # Contributors (recommended): library + CLI + all test tooling + every adapter
 uv pip install -e ".[dev]"
 
-# Or pick only what you need: . (minimal), [mcp], [otel], [langgraph],
-# [openai], [langchain], [attest], [postgres]
+# Or pick only what you need: . (minimal), [mcp], [browser], [kubernetes],
+# [otel], [langgraph], [openai], [langchain], [attest], [postgres]
 
 # Or skip the clone entirely:
 uv pip install git+https://github.com/Cyrax321/CONTINUUM.git
@@ -93,6 +93,13 @@ uv pip install "continuum-agent[mcp] @ git+https://github.com/Cyrax321/CONTINUUM
 ```
 
 > **pip fallback:** replace `uv pip install` with `pip install` in every command above.
+
+Optional environment adapters:
+
+- `uv pip install -e ".[browser]"` enables `BrowserAdapter`; run
+  `playwright install chromium` separately to install the browser binary.
+- `uv pip install -e ".[kubernetes]"` enables `KubernetesAdapter`; `kubectl` and
+  a configured cluster remain external prerequisites.
 
 Verify:
 
