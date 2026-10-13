@@ -81,7 +81,7 @@ cd CONTINUUM
 
 uv venv && source .venv/bin/activate     # macOS / Linux; Windows: .venv\Scripts\activate
 
-# Contributors (recommended): library + CLI + all test tooling + every adapter
+# Contributors (recommended): library + CLI + test tooling + framework integrations
 uv pip install -e ".[dev]"
 
 # Or pick only what you need: . (minimal), [mcp], [browser], [kubernetes],
@@ -100,6 +100,9 @@ Optional environment adapters:
   `playwright install chromium` separately to install the browser binary.
 - `uv pip install -e ".[kubernetes]"` enables `KubernetesAdapter`; `kubectl` and
   a configured cluster remain external prerequisites.
+
+If you use pip instead of uv, run `pip install -e ".[browser]"` or
+`pip install -e ".[kubernetes]"` with the same external prerequisites.
 
 Verify:
 
