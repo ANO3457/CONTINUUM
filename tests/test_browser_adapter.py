@@ -5,13 +5,15 @@ import pytest
 
 import continuum.adapters.browser as browser_mod
 from continuum.adapters.browser import BrowserAdapter
+from continuum.models import Run
+from continuum.storage import SQLiteStorage
 
 
 @pytest.fixture
 def storage():
-    mock_store = MagicMock()
-    mock_store.record_action_start.return_value = "action_1"
-    return mock_store
+    store = SQLiteStorage(":memory:")
+    store.create_run(Run(run_id="run_1", goal="env"))
+    return store
 
 
 @pytest.fixture
@@ -26,48 +28,76 @@ def test_browser_adapter_available_flag(storage):
         assert adapter.available() is False
 
     mock_pw = MagicMock()
-    with patch.dict(sys.modules, {"playwright": mock_pw, "playwright.sync_api": mock_pw}):
+    with patch.dict(
+        sys.modules, {"playwright": mock_pw, "playwright.sync_api": mock_pw}
+    ):
         assert adapter.available() is True
 
 
 def test_browser_adapter_navigate_without_playwright(storage, run_id):
     adapter = BrowserAdapter(storage)
-    with patch.object(adapter, "available", return_value=False), pytest.raises(RuntimeError):
+    with patch.object(
+        adapter, "available", return_value=False
+    ), pytest.raises(RuntimeError):
         adapter.navigate(run_id, "https://example.com")
 
 
 def test_browser_adapter_navigate_success(storage, run_id):
     adapter = BrowserAdapter(storage)
 
-    fake_result = MagicMock()
-    fake_result.status = "completed"
-    fake_result.output = "<html><body>Hello World</body></html>"
+    mock_page = MagicMock()
+    mock_page.content.return_value = "<html><body>Hello World</body></html>"
+
+    mock_browser = MagicMock()
+    mock_browser.new_page.return_value = mock_page
+
+    mock_pw_ctx = MagicMock()
+    mock_pw_ctx.chromium.launch.return_value = mock_browser
+
+    mock_sync_api = MagicMock()
+    mock_sync_api.sync_playwright.return_value.__enter__.return_value = mock_pw_ctx
 
     with (
+        patch.dict(
+            sys.modules,
+            {"playwright": MagicMock(), "playwright.sync_api": mock_sync_api},
+        ),
         patch.object(adapter, "available", return_value=True),
-        patch.object(browser_mod, "run_action", return_value=fake_result) as mock_run_action,
     ):
         result = adapter.navigate(run_id, "https://example.com")
 
         assert result.status == "completed"
         assert "Hello World" in result.output
-        mock_run_action.assert_called_once()
+        mock_page.goto.assert_called_once_with("https://example.com")
+        mock_browser.close.assert_called_once()
 
 
 def test_browser_adapter_navigate_failure_captured(storage, run_id):
     adapter = BrowserAdapter(storage)
 
-    fake_result = MagicMock()
-    fake_result.status = "failed"
-    fake_result.error = "Connection timed out"
+    mock_page = MagicMock()
+    mock_page.goto.side_effect = Exception("Connection timed out")
+
+    mock_browser = MagicMock()
+    mock_browser.new_page.return_value = mock_page
+
+    mock_pw_ctx = MagicMock()
+    mock_pw_ctx.chromium.launch.return_value = mock_browser
+
+    mock_sync_api = MagicMock()
+    mock_sync_api.sync_playwright.return_value.__enter__.return_value = mock_pw_ctx
 
     with (
+        patch.dict(
+            sys.modules,
+            {"playwright": MagicMock(), "playwright.sync_api": mock_sync_api},
+        ),
         patch.object(adapter, "available", return_value=True),
-        patch.object(browser_mod, "run_action", return_value=fake_result),
     ):
         result = adapter.navigate(run_id, "https://invalid-url.fake")
 
         assert result.status == "failed"
+        assert result.error is not None
         assert "Connection timed out" in str(result.error)
 
 
