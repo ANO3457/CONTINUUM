@@ -40,13 +40,16 @@ def test_init_with_custom_engine(tmp_path: pathlib.Path) -> None:
     assert adapter.engine is engine
 
 
-def test_run_shell_with_argv_list(tmp_path: pathlib.Path) -> None:
+def test_run_shell_with_argv_list(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     storage = _storage()
     adapter = FilesystemSandboxAdapter(storage, str(tmp_path / "sandbox"))
     command = [sys.executable, "-c", "print('hello from argv')"]
+    run_spy = Mock(wraps=subprocess.run)
+    monkeypatch.setattr("continuum.adapters.filesystem.subprocess.run", run_spy)
 
     result = adapter.run_shell("run_fs", command)
 
+    assert run_spy.call_args.kwargs.get("shell") is False
     assert result.status == "completed"
     assert "hello from argv" in result.output
     assert result.error is None
@@ -58,14 +61,19 @@ def test_run_shell_with_argv_list(tmp_path: pathlib.Path) -> None:
     assert recorded[0].arguments["command"] == command
 
 
-def test_run_shell_with_string_command(tmp_path: pathlib.Path) -> None:
+def test_run_shell_with_string_command(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     storage = _storage()
     adapter = FilesystemSandboxAdapter(storage, str(tmp_path / "sandbox"))
     # Use sys.executable in a portable string command
     command = f'"{sys.executable}" -c "print(\'hello from string\')"'
+    run_spy = Mock(wraps=subprocess.run)
+    monkeypatch.setattr("continuum.adapters.filesystem.subprocess.run", run_spy)
 
     result = adapter.run_shell("run_fs", command)
 
+    assert run_spy.call_args.kwargs.get("shell") is True
     assert result.status == "completed"
     assert "hello from string" in result.output
     assert result.error is None
