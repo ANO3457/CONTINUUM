@@ -10,18 +10,18 @@ from continuum.storage import SQLiteStorage
 
 
 @pytest.fixture
-def storage():
+def storage() -> SQLiteStorage:
     store = SQLiteStorage(":memory:")
     store.create_run(Run(run_id="run_1", goal="env"))
     return store
 
 
 @pytest.fixture
-def run_id():
+def run_id() -> str:
     return "run_1"
 
 
-def test_browser_adapter_available_flag(storage):
+def test_browser_adapter_available_flag(storage: SQLiteStorage) -> None:
     adapter = BrowserAdapter(storage)
 
     with patch.dict(sys.modules, {"playwright": None, "playwright.sync_api": None}):
@@ -34,7 +34,9 @@ def test_browser_adapter_available_flag(storage):
         assert adapter.available() is True
 
 
-def test_browser_adapter_navigate_without_playwright(storage, run_id):
+def test_browser_adapter_navigate_without_playwright(
+    storage: SQLiteStorage, run_id: str
+) -> None:
     adapter = BrowserAdapter(storage)
     with patch.object(
         adapter, "available", return_value=False
@@ -42,7 +44,9 @@ def test_browser_adapter_navigate_without_playwright(storage, run_id):
         adapter.navigate(run_id, "https://example.com")
 
 
-def test_browser_adapter_navigate_success(storage, run_id):
+def test_browser_adapter_navigate_success(
+    storage: SQLiteStorage, run_id: str
+) -> None:
     adapter = BrowserAdapter(storage)
 
     mock_page = MagicMock()
@@ -67,12 +71,14 @@ def test_browser_adapter_navigate_success(storage, run_id):
         result = adapter.navigate(run_id, "https://example.com")
 
         assert result.status == "completed"
-        assert "Hello World" in result.output
+        assert "Hello World" in str(result.output)
         mock_page.goto.assert_called_once_with("https://example.com")
         mock_browser.close.assert_called_once()
 
 
-def test_browser_adapter_navigate_failure_captured(storage, run_id):
+def test_browser_adapter_navigate_failure_captured(
+    storage: SQLiteStorage, run_id: str
+) -> None:
     adapter = BrowserAdapter(storage)
 
     mock_page = MagicMock()
@@ -101,7 +107,9 @@ def test_browser_adapter_navigate_failure_captured(storage, run_id):
         assert "Connection timed out" in str(result.error)
 
 
-def test_browser_adapter_dep_scope_forwarding(storage, run_id):
+def test_browser_adapter_dep_scope_forwarding(
+    storage: SQLiteStorage, run_id: str
+) -> None:
     adapter = BrowserAdapter(storage)
 
     with (
