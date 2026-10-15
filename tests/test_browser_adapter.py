@@ -28,25 +28,17 @@ def test_browser_adapter_available_flag(storage: SQLiteStorage) -> None:
         assert adapter.available() is False
 
     mock_pw = MagicMock()
-    with patch.dict(
-        sys.modules, {"playwright": mock_pw, "playwright.sync_api": mock_pw}
-    ):
+    with patch.dict(sys.modules, {"playwright": mock_pw, "playwright.sync_api": mock_pw}):
         assert adapter.available() is True
 
 
-def test_browser_adapter_navigate_without_playwright(
-    storage: SQLiteStorage, run_id: str
-) -> None:
+def test_browser_adapter_navigate_without_playwright(storage: SQLiteStorage, run_id: str) -> None:
     adapter = BrowserAdapter(storage)
-    with patch.object(
-        adapter, "available", return_value=False
-    ), pytest.raises(RuntimeError):
+    with patch.object(adapter, "available", return_value=False), pytest.raises(RuntimeError):
         adapter.navigate(run_id, "https://example.com")
 
 
-def test_browser_adapter_navigate_success(
-    storage: SQLiteStorage, run_id: str
-) -> None:
+def test_browser_adapter_navigate_success(storage: SQLiteStorage, run_id: str) -> None:
     adapter = BrowserAdapter(storage)
 
     mock_page = MagicMock()
@@ -76,9 +68,7 @@ def test_browser_adapter_navigate_success(
         mock_browser.close.assert_called_once()
 
 
-def test_browser_adapter_navigate_failure_captured(
-    storage: SQLiteStorage, run_id: str
-) -> None:
+def test_browser_adapter_navigate_failure_captured(storage: SQLiteStorage, run_id: str) -> None:
     adapter = BrowserAdapter(storage)
 
     mock_page = MagicMock()
@@ -107,9 +97,7 @@ def test_browser_adapter_navigate_failure_captured(
         assert "Connection timed out" in str(result.error)
 
 
-def test_browser_adapter_dep_scope_forwarding(
-    storage: SQLiteStorage, run_id: str
-) -> None:
+def test_browser_adapter_dep_scope_forwarding(storage: SQLiteStorage, run_id: str) -> None:
     adapter = BrowserAdapter(storage)
 
     with (
