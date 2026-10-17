@@ -955,6 +955,16 @@ Test counts: ~3680 collected on a minimal env.
   replay behaviour of a repeated command. Commands that must fail are built from
   `sys.executable` so the suite behaves the same on Windows. Coverage of the
   module is 100%.
+- **The in-process python adapter is covered (#1685).**
+  `PythonInProcAdapter` had two passing-snippet tests and nothing else. The
+  paths that matter for recovery were untested: a snippet that raises, a
+  snippet that exits non-zero, and a snippet that writes an effect and *then*
+  raises, which is the shape a resumed run has to recognise as uncertain rather
+  than complete. `tests/test_python_inproc_adapter.py` covers both failure
+  modes as captured `AdapterResult` values, workdir creation and reuse, the
+  working directory the snippet actually observes, `dep_scope` forwarding
+  including on a failed run, and the replay behaviour of a repeated snippet.
+  Coverage of the module is 100%.
 
 ## [0.1.2] - 2026-08-31
 
