@@ -74,9 +74,7 @@ def test_animation_is_on_without_the_opt_out(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.parametrize("value", ["1", "", "false", "no"])
-def test_the_opt_out_wins_over_any_value(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
+def test_the_opt_out_wins_over_any_value(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setenv("CONTINUUM_NO_ANIMATION", value)
     monkeypatch.setenv("TERM", "xterm-256color")
 
@@ -224,9 +222,7 @@ def test_pulse_repeats_on_its_period() -> None:
 
 def test_a_longer_period_holds_each_emphasis_longer() -> None:
     def switches(period: float) -> int:
-        return sum(
-            1 for f in range(120) if pulse(f, period=period) != pulse(f - 1, period=period)
-        )
+        return sum(1 for f in range(120) if pulse(f, period=period) != pulse(f - 1, period=period))
 
     assert switches(8.0) < switches(1.6)
 

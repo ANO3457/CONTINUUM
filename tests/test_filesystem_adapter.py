@@ -123,7 +123,9 @@ def test_an_argv_list_does_not_expand_a_metacharacter(tmp_path: Path) -> None:
     """The point of the argv form: no shell means no glob, no split, no subshell."""
     adapter = make_adapter(tmp_path)
 
-    result = adapter.run_shell("run_1", [sys.executable, "-c", "import sys; print(sys.argv[1])", "*"])
+    result = adapter.run_shell(
+        "run_1", [sys.executable, "-c", "import sys; print(sys.argv[1])", "*"]
+    )
 
     assert result.output.strip() == "*"
 
