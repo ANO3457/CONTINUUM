@@ -922,6 +922,39 @@ Test counts: ~3680 collected on a minimal env.
   a mock would skip the anchor logic under test) and covers the happy path,
   the three re-anchor triggers, and each refusal. Coverage of the module is
   97%, and removing the comparison fails three tests.
+- **The liveness cadence contract is covered (#1656).**
+  `src/continuum/recovery/health.py` was at 76%. `silence_seconds` had not a
+  single line of coverage, both `load_cadence_contract` refusals were
+  unexercised, and `CadenceContract._scopes_positive` had never been seen to
+  raise, so a change that stopped rejecting a blank scope key or a zero-second
+  scope would not have been caught. `tests/test_recovery_health_cadence.py`
+  covers all three exits of `silence_seconds`, both refusals, every validator
+  branch, `threshold_for` including the fallback for an absent scope,
+  `to_dict`, and `advisory_text`, which had no test at all. The module is now
+  at 90%. No test reads the operator's real `.continuum/liveness.json`; every
+  load points at a file in `tmp_path`, which is what keeps the suite from
+  depending on the machine it runs on.
+- **The splash animation frame math is pinned (#1655).**
+  `src/continuum/tui/animate.py` shipped with no test at all. Its only
+  appearance in a coverage report was
+  `tests/test_module_all_exports.py` importing it, which touches module-level
+  lines and no function body. `tests/test_tui_animate.py` covers all six public
+  functions and the exported constants, and asserts the `SETTLED` contract that
+  makes them safe: a negative frame resolves to the complete, unemphasised
+  result for every one of them. The module is still orphaned, and is left that
+  way on purpose; wiring it up is a design question with its own issue.
+  Coverage of the module is 100%.
+- **The filesystem sandbox adapter is covered (#1684).**
+  `FilesystemSandboxAdapter` had one happy-path test in
+  `tests/test_environment_adapters.py`, using a raw string command. The argv
+  form, which is what makes a command portable across shell families (#842),
+  was untested, and so was the failure path, where a non-zero exit is captured
+  as a failed `AdapterResult` instead of propagating so the ledger attempt stays
+  recorded. `tests/test_filesystem_adapter.py` covers both command forms, the
+  captured failure, sandbox directory creation, `dep_scope` forwarding, and the
+  replay behaviour of a repeated command. Commands that must fail are built from
+  `sys.executable` so the suite behaves the same on Windows. Coverage of the
+  module is 100%.
 
 ## [0.1.2] - 2026-08-31
 
