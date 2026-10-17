@@ -908,6 +908,21 @@ Test counts: ~3680 collected on a minimal env.
   callable), and the existing answers for genuinely malformed JSON are
   unchanged.
 
+### Tests
+
+- **`resolve_compaction_bound` is covered (#1653).**
+  `src/continuum/storage/compaction.py` was at 17%: the whole function body
+  was unexercised, including all four `ValueError` branches, in the module
+  both storage engines now share to decide what is safe to archive. That
+  matters because the comparison against `anchor_sequence` is the guard that
+  stops an explicit `through_sequence` from archiving the run's own anchor
+  marker, which is the regression fix for #705 and #1078.
+  `tests/test_storage_compaction_bound.py` drives a real `SQLiteStorage` in
+  `tmp_path` (the resolver calls the private `storage._anchor_environment`, so
+  a mock would skip the anchor logic under test) and covers the happy path,
+  the three re-anchor triggers, and each refusal. Coverage of the module is
+  97%, and removing the comparison fails three tests.
+
 ## [0.1.2] - 2026-08-31
 
 ### Fixed
