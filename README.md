@@ -331,6 +331,8 @@ Over MCP the equivalent is the `continuum_confirm` tool followed by `continuum_r
 
 ## Core Concepts
 
+The vocabulary these sections use is defined in [docs/GLOSSARY.md](docs/GLOSSARY.md), with every term pointing at its implementation.
+
 The deep reference for each concept lives in [references/concepts.md](references/concepts.md).
 
 - **Semantic Checkpoints** - a compact, versioned representation of what the agent needs to continue.
