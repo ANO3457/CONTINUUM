@@ -560,6 +560,31 @@ If you want the verdict enforced, wire a seam or gate your pipeline on the exit 
 
 CONTINUUM sits at the overlap of durable execution, idempotent side-effect tracking, and crash recovery for LLM agents. The closest neighbors are machine-checked resume contracts (Khan 2026), agentic transaction processing with constraint-gated admission (Mnemosyne 2026), checkpoint-rollback attack analysis (ACRFence 2026), and design-level prompt-injection defense (CaMeL 2025). The full annotated list, foundations, and citation audit are in [references/related-work.md](references/related-work.md).
 
+## Documentation map
+
+Every page under `docs/` and the reasoning behind it:
+
+- **Reference and API**: [docs/api/README.md](docs/api/README.md) (library, CLI, MCP, sidecar),
+  [docs/GLOSSARY.md](docs/GLOSSARY.md) (every recovery term, each pointing at its implementation),
+  [references/api.md](references/api.md), [references/cli.md](references/cli.md).
+- **Task guides**: [docs/guides/README.md](docs/guides/README.md),
+  [docs/recipes/README.md](docs/recipes/README.md), [docs/concepts/README.md](docs/concepts/README.md).
+- **Security**: [docs/threat_model.md](docs/threat_model.md) (what is protected, detected, and
+  explicitly not), [docs/signing_key_rotation.md](docs/signing_key_rotation.md) (rotating a keyed
+  seal without breaking verification of older hash-only contracts).
+- **Contracts and scale**: [docs/contract_compatibility.md](docs/contract_compatibility.md)
+  (a sealed promise verified by another build),
+  [docs/multi_agent_isolation.md](docs/multi_agent_isolation.md) (shared `run_id` isolation),
+  [docs/audit-provenance-compaction-294.md](docs/audit-provenance-compaction-294.md)
+  (provenance surviving compaction).
+- **Authoring and operations**: [docs/adapters_guide.md](docs/adapters_guide.md) (writing an
+  adapter), [docs/cloud_api.md](docs/cloud_api.md) (optional deployment layer),
+  [docs/TESTING_MCP.md](docs/TESTING_MCP.md) (adversarial MCP surface audit),
+  [docs/CONTRIBUTING_ONBOARDING.md](docs/CONTRIBUTING_ONBOARDING.md) (orientation).
+- **Plans**: [docs/ARCHITECTURE_EVOLUTION.md](docs/ARCHITECTURE_EVOLUTION.md) (the north star),
+  [docs/CONTINUUM_MASTER_PLAN.md](docs/CONTINUUM_MASTER_PLAN.md) (verified state and next work),
+  [docs/research/README.md](docs/research/README.md) (the notes those plans came from).
+
 ## Status and limitations
 
 - **Tested**: 3,680 collected, most passing; exact skips vary in a full run at the 2026-08-24 audit of this tree; CI enforces the suite on Python 3.11, 3.12, and 3.13, and counts vary by platform and optional services such as Postgres (see [STATUS.md](STATUS.md)). The MCP surface has also been audited adversarially over the live protocol; see [test.md](test.md).
