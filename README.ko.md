@@ -566,5 +566,3 @@ Apache 2.0, [LICENSE](LICENSE) 참조.
 
 - [Issues](https://github.com/Cyrax321/CONTINUUM/issues) 버그 보고 및 기능 제안
 - [Discussions](https://github.com/Cyrax321/CONTINUUM/discussions) 설계 및 디자인 제안
-- [릴리스 노트](docs/release-notes.md)
-- [릴리스 체크리스트](docs/release-checklist.md)
