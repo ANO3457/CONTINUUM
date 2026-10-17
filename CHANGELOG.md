@@ -142,6 +142,29 @@ Test counts: ~3680 collected on a minimal env.
   since declaring such fields `volatile` at every call site is not a fix: a
   caller that wants around the cap simply forgets to declare them.
 
+- **The doctor no longer reports a portable registration as stale (#1619).**
+  `.mcp.json` in this repository bakes the form `docs/api/mcp.md` tells people
+  to commit, `${CLAUDE_PROJECT_DIR:-.}/.venv/bin/continuum-mcp`.
+  `os.path.expandvars` does not understand the shell's `${VAR:-default}`
+  syntax, so the text reached `_resolves` unchanged, was not absolute, and fell
+  through to a PATH lookup for a name no PATH will ever contain. The row came
+  back `stale` on every machine, which is the state whose remedy is to re-bake
+  the path, and re-baking replaces a portable committed expression with an
+  absolute one tied to whichever machine ran it. A clean clone therefore
+  exited `REQUIRES_REPAIR` (10) and printed advice that would have made the
+  registration worse.
+
+  A command carrying a shell expression is now reported as `unverified`, a
+  third state carried on `IdeReport.unverified`. It is not stale, so it does
+  not drive the repair exit code; the summary and the detail row say plainly
+  that the host expands it at spawn and the doctor cannot check it. Detection
+  is a literal `$` in the command, which also covers `$VAR` and `$HOME`: those
+  expand to a real path when the variable is set and to a literal `$NAME` when
+  it is not, so the unset case would otherwise have reported a path containing
+  a `$` as broken. A genuinely deleted virtualenv is still `stale`, still
+  exits `REQUIRES_REPAIR`, and still prints the re-bake remedy. The hook
+  surface is untouched: it bakes absolute paths and has no expression form.
+
 ### Changed
 
 - **The authority-resurrection check now goes through its own exported helper
