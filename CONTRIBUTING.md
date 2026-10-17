@@ -83,6 +83,19 @@ pytest tests/test_events.py -v
 pytest tests/test_hashing.py tests/test_models.py -v
 ```
 
+### Documentation guards
+
+`tests/test_docs_counts.py` holds roughly twenty guards that fail CI when a figure
+documented in the READMEs, translated READMEs, or reference docs drifts from
+the code: collected test total, module count, test-file count, CLI subcommand
+count, event-type count, fault-suite size, and more. Several carry a failure
+message that names the exact files to edit.
+
+The module-map figures in `README.md` are pinned with zero tolerance. Adding a
+test file means bumping the test-file count; adding a module means bumping the
+module count. That is intended behaviour, and the guard's own error message is
+the authority on which line to change, so do not duplicate it here.
+
 ---
 
 ## Troubleshooting
