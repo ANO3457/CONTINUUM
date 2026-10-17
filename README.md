@@ -668,6 +668,23 @@ Deep reference material:
 - [references/testing.md](references/testing.md) - test suite layout and conventions
 - [references/related-work.md](references/related-work.md) - annotated related work and citation audit
 
+Architecture, in five related pages. Read them in this order if you want the
+whole picture, or start at the data if you already know the shape:
+
+- [references/architecture-spec.md](references/architecture-spec.md) - the authoritative text-only specification, written so it can be handed to an image model
+- [references/architecture-data.md](references/architecture-data.md) - every figure read from the code at the current `main` commit, with `file:line` citations (guarded by `tests/test_architecture_data.py`)
+- [references/architecture-diagram.md](references/architecture-diagram.md) - the complete system view: clients, adapters, the deny-by-default MCP server, SDK internals
+- [references/architecture-flow.md](references/architecture-flow.md) - verified Mermaid flow graph, every node label matching `architecture-data.md`
+- [references/architecture-drawing-prompt.md](references/architecture-drawing-prompt.md) - the prompt that turns the diagram into an image
+
+Integration and attestation:
+
+- [references/integration-architecture.md](references/integration-architecture.md) - attaching to any system, and what the field does about it
+- [references/auto-resume-integration.md](references/auto-resume-integration.md) - auto-resume architecture, current state, and open problems
+- [references/attestation.md](references/attestation.md) - event-chain attestation design (implemented)
+- [references/implementation-plan.md](references/implementation-plan.md) - remaining roadmap items, status verified against the tree
+- [references/citation-audit-2026-08-24.md](references/citation-audit-2026-08-24.md) - audit of external claims about the related-work list
+
 ## Quick links
 
 - [Issues](https://github.com/Cyrax321/CONTINUUM/issues) for bugs/features
