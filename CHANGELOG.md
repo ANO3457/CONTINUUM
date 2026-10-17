@@ -142,6 +142,21 @@ Test counts: ~3680 collected on a minimal env.
   since declaring such fields `volatile` at every call site is not a fix: a
   caller that wants around the cap simply forgets to declare them.
 
+- **The doctor stops contradicting the server over client-name case (#1621).**
+  `doctor._observation_finding` compared the baked client name against the
+  names hosts actually sent with a raw `in`, while every comparison in
+  `authz` goes through the fold. The `zed` profile makes the discrepancy
+  visible immediately: `HOST_PROFILES["zed"]["mutating_clients"]` is `"Zed"`,
+  capital Z, transcribed from zed's own source, and `docs/api/mcp.md` tells
+  readers the comparison folds case. The server authorized the caller; the
+  doctor said it had been refused and that install reported success.
+
+  The comparison now folds both sides through the same normalisation, so the
+  doctor agrees with the server. The normaliser is also exported as
+  `authz.fold_client_name`, so there is one place to read the rule instead of
+  re-deriving it. The `_fold` alias is kept so existing readers still resolve.
+
+
 - **The doctor no longer reports a portable registration as stale (#1619).**
   `.mcp.json` in this repository bakes the form `docs/api/mcp.md` tells people
   to commit, `${CLAUDE_PROJECT_DIR:-.}/.venv/bin/continuum-mcp`.

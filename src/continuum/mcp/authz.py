@@ -164,9 +164,6 @@ class NotAuthenticated(PermissionError):
     """The caller did not prove possession of the expected shared secret."""
 
 
-_fold = fold_client_name  # backwards-compatible alias
-
-
 def fold_client_name(name: str) -> str:
     """Normalise a client name so one spelling is one identity (#1598).
 
@@ -739,3 +736,7 @@ def caller_name(context: Any) -> str | None:
         return None
     name = getattr(info, "name", None)
     return str(name) if name else None
+
+
+# Backwards-compatible alias for readers that still reach for the private name.
+_fold = fold_client_name
