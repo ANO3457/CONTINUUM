@@ -566,3 +566,5 @@ Material de referência profundo:
 
 - [Issues](https://github.com/Cyrax321/CONTINUUM/issues) para bugs e recursos
 - [Discussions](https://github.com/Cyrax321/CONTINUUM/discussions) para propostas de design
+- [Notas de release](docs/release-notes.md)
+- [Checklist de release](docs/release-checklist.md)

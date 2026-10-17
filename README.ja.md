@@ -565,3 +565,5 @@ Apache 2.0、[LICENSE](LICENSE) を参照。
 
 - [Issues](https://github.com/Cyrax321/CONTINUUM/issues) バグ報告や新機能の要望
 - [Discussions](https://github.com/Cyrax321/CONTINUUM/discussions) 設計や仕様の提案
+- [リリースノート](docs/release-notes.md)
+- [リリースチェックリスト](docs/release-checklist.md)
