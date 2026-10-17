@@ -476,6 +476,8 @@ Full reference in [references/architecture.md](references/architecture.md). And 
 
 ## API and CLI
 
+Task guides are indexed in [docs/guides/README.md](docs/guides/README.md), the library and CLI reference in [docs/api/README.md](docs/api/README.md), worked end-to-end examples in [docs/recipes/README.md](docs/recipes/README.md), and the mechanism behind constraint survival in [docs/concepts/README.md](docs/concepts/README.md).
+
 Python surface (`EventType`, `Run`, `SQLiteStorage`, `diff_states`, `project`) and the adapter API are documented with runnable examples in [references/api.md](references/api.md). The CLI is the same surface in shell form:
 
 ```bash
