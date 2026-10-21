@@ -976,7 +976,8 @@ Test counts: ~3680 collected on a minimal env.
   `tmp_path` (the resolver calls the private `storage._anchor_environment`, so
   a mock would skip the anchor logic under test) and covers the happy path,
   the three re-anchor triggers, and each refusal. Coverage of the module is
-  97%, and removing the comparison fails three tests.
+  97%, and removing the comparison fails three tests. Initial tests contributed
+  by @fraware in #1671.
 - **The liveness cadence contract is covered (#1656).**
   `src/continuum/recovery/health.py` was at 76%. `silence_seconds` had not a
   single line of coverage, both `load_cadence_contract` refusals were
