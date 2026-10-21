@@ -762,7 +762,10 @@ def _tracked_paths() -> set[str] | None:
     ``git ls-files`` rather than a directory walk: a file can sit on disk and
     be ignored, and it is the committed copy every other clone receives.
     """
-    proc = subprocess.run(["git", "ls-files"], cwd=_REPO_ROOT, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(["git", "ls-files"], cwd=_REPO_ROOT, capture_output=True, text=True)
+    except FileNotFoundError:
+        return None
     if proc.returncode != 0:
         return None
     return set(proc.stdout.split())
