@@ -10,6 +10,15 @@ Test counts: ~3680 collected on a minimal env.
 
 ### Added
 
+- **Atomic claim in storage eliminates concurrent duplicate actions.**
+  `ActionLedger.claim` now resolves and records within a single atomic storage
+  transaction (`atomic_claim`). On SQLite, a single `BEGIN IMMEDIATE` transaction
+  wraps both claim resolution and event append, preventing race conditions where
+  multiple writers observe an unclaimed key and both append. On PostgreSQL, an
+  explicit transaction with `pg_advisory_xact_lock` on the action key enforces
+  mutual exclusion. Concurrency race tests verify zero duplicate claims across 64
+  threads, 16 processes, and crash fault injection (`kill -9`).
+
 - **Good first issues and Hacktoberfest guidance in CONTRIBUTING.md (#1652).**
   Added an on-ramp section pointing to tracking issue #1661, ground rules for
   first pull requests, a Table of Contents, and a reference table for issue
