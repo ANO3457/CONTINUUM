@@ -18,7 +18,7 @@ from typing import Any
 
 from continuum.benchmark.phase6.metrics import BenchmarkReport, RecoveryOutcome, ScenarioResult
 from continuum.events import EventType
-from continuum.models import Run
+from continuum.models import Run, utcnow
 from continuum.recovery import RecoveryEngine
 from continuum.storage import SQLiteStorage
 from continuum.storage.base import Storage
@@ -658,4 +658,4 @@ def run_benchmark_suite() -> BenchmarkReport:
         )
     )
 
-    return BenchmarkReport(generated_at=datetime.now(), results=results)
+    return BenchmarkReport(generated_at=utcnow(), results=results)
