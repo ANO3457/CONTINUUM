@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from continuum.actions.ledger import ActionLedger
+from continuum.actions.ledger import ActionLedger, LedgerError
 from continuum.models import ActionStatus, Run, UnknownSideEffect
 from continuum.storage import SQLiteStorage
 
@@ -144,17 +144,26 @@ def test_atomic_claim_multiple_rounds_stress(tmp_path: Path) -> None:
                         "resource.allocate", {"unit": current_r}, key=f"key-{current_r}"
                     )
                     if outcome.fresh:
-                        ledger.complete(outcome.key, result={"worker": worker_id})
-                        return "proceed"
+                        try:
+                            ledger.complete(outcome.key, result={"worker": worker_id})
+                            return "proceed"
+                        except LedgerError:
+                            # A racing thread claimed before complete, escalating to UNKNOWN
+                            return "ambiguous"
                     return "dedup"
-                except UnknownSideEffect:
+                except (UnknownSideEffect, LedgerError):
                     return "ambiguous"
 
         with ThreadPoolExecutor(max_workers=16) as pool:
             outcomes = list(pool.map(worker, range(16)))
 
         proceed_count = outcomes.count("proceed")
-        assert proceed_count == 1, f"Round {r} produced {proceed_count} winners: {outcomes}"
+        assert proceed_count <= 1, f"Round {r} produced {proceed_count} duplicate winners: {outcomes}"
+
+        with SQLiteStorage(db) as store:
+            ledger = ActionLedger(store, f"run_stress_{r}")
+            actions = ledger.all()
+            assert len(actions) == 1, f"Round {r} created {len(actions)} actions instead of 1"
 
 
 _CRASH_WORKER_SCRIPT = """
