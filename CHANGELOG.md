@@ -1025,7 +1025,8 @@ Test counts: ~3680 collected on a minimal env.
   `to_dict`, and `advisory_text`, which had no test at all. The module is now
   at 90%. No test reads the operator's real `.continuum/liveness.json`; every
   load points at a file in `tmp_path`, which is what keeps the suite from
-  depending on the machine it runs on.
+  depending on the machine it runs on. Additional cadence contracts and liveness
+  evaluation tests contributed by @heyyReggiee in #1670.
 - **The splash animation frame math is pinned (#1655).**
   `src/continuum/tui/animate.py` shipped with no test at all. Its only
   appearance in a coverage report was
