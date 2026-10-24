@@ -585,6 +585,7 @@ class SidecarHTTP:
                 if getattr(self, "close_connection", False):
                     self.send_header("Connection", "close")
                 self.send_header("Content-Type", "application/json")
+                self.send_header("Continuum-Version", "1.0")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -757,21 +758,34 @@ class SidecarHTTP:
                 try:
                     result = sidecar_ref.dispatch(method, params, token=header_token)
                 except MethodNotFound as exc:
-                    self._json(404, {"error": str(exc)})
+                    self._json(404, {"error": str(exc), "code": exc.code})
                     return
                 except NotAuthorized as exc:
-                    self._json(403, {"error": str(exc)})
+                    self._json(403, {"error": str(exc), "code": exc.code})
                     return
                 except BadParams as exc:
-                    self._json(400, {"error": str(exc)})
+                    self._json(400, {"error": str(exc), "code": exc.code})
                     return
                 except SidecarError as exc:
-                    self._json(500, {"error": str(exc)})
+                    self._json(500, {"error": str(exc), "code": exc.code})
                     return
                 except Exception as exc:  # storage errors (missing run etc.)
-                    self._json(500, {"error": str(exc)})
+                    self._json(500, {"error": str(exc), "code": "internal"})
                     return
                 self._json(200, result)
+
+            def do_GET(self) -> None:
+                """Route GET requests for health probes and OpenAPI schema."""
+                path = self.path.split("?")[0].rstrip("/")
+                if path in ("/healthz", "/readyz"):
+                    self._json(200, {"status": "ok", "version": "1.0"})
+                    return
+                if path in ("/openapi.json", "/spec"):
+                    from continuum.serve.openapi import get_openapi_spec
+
+                    self._json(200, get_openapi_spec())
+                    return
+                self._json(404, {"error": f"not found: {self.path}", "code": "not_found"})
 
         server = http.server.ThreadingHTTPServer((bind, port), Handler)
         self.httpd = server
