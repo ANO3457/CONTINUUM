@@ -613,8 +613,6 @@ def run_fault_injection_suite(
 
 def run_benchmark_suite() -> BenchmarkReport:
     """Adapter to run the fault-injection suite via the Phase 6 harness."""
-    from datetime import datetime
-
     from .faults import CI_FAULTS
 
     results: list[ScenarioResult] = []
