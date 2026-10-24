@@ -235,7 +235,6 @@ def test_shared_emitter_schema_with_fault_injection() -> None:
     import json
     import os
     import tempfile
-    from datetime import datetime
 
     from benchmarks.horizon.emitter import emit_horizon_report
     from benchmarks.horizon.runner import run_horizon_suite
@@ -245,6 +244,7 @@ def test_shared_emitter_schema_with_fault_injection() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         from benchmarks.fault_injection.emitter import emit_fault_injection_report
         from continuum.benchmark.phase6.metrics import BenchmarkReport
+        from continuum.models import utcnow
 
         dummy_fault = BenchmarkReport(
             generated_at=utcnow(),
