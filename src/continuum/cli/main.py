@@ -5621,6 +5621,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="wire transport (default: stdio; http serves POST /<method> JSON).",
     )
     serve.add_argument("--port", type=int, default=8765, help="port for --transport http.")
+    serve.add_argument(
+        "--bind",
+        default=os.environ.get("CONTINUUM_SERVE_BIND", "127.0.0.1"),
+        help="host address to bind for --transport http (default: 127.0.0.1, env: CONTINUUM_SERVE_BIND).",
+    )
+
+    def _cmd_conformance(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
+        from continuum.serve.conformance import cmd_conformance
+
+        return cmd_conformance(args, out=out, err=err)
+
+    conformance = add(
+        "conformance",
+        _cmd_conformance,
+        "Run the wire protocol conformance suite against a CONTINUUM server endpoint.",
+    )
+    conformance.add_argument(
+        "--url",
+        default="http://127.0.0.1:8765",
+        help="target server URL to test (default: http://127.0.0.1:8765).",
+    )
+    conformance.add_argument(
+        "--token",
+        default=os.environ.get("CONTINUUM_SERVE_TOKEN"),
+        help="client authorization bearer token.",
+    )
+    conformance.add_argument(
+        "--confirm-token",
+        default=os.environ.get("CONTINUUM_SERVE_CONFIRM_TOKEN"),
+        help="dedicated confirm credential token.",
+    )
 
     def cmd_dashboard(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
         """Serve the read-only dashboard, blocking until interrupted.
