@@ -15,6 +15,10 @@ import subprocess
 import sys
 from typing import IO, Any, TextIO, cast
 
+from continuum.serve.openapi import (
+    OPENAPI_SPEC,
+    get_openapi_spec,
+)
 from continuum.serve.server import (
     BadParams,
     BadRequest,
@@ -37,6 +41,8 @@ __all__ = [
     "run_serve",
     "cmd_serve",
     "list_methods",
+    "OPENAPI_SPEC",
+    "get_openapi_spec",
     "SidecarError",
     "MethodNotFound",
     "NotAuthorized",
