@@ -158,7 +158,9 @@ def test_atomic_claim_multiple_rounds_stress(tmp_path: Path) -> None:
             outcomes = list(pool.map(worker, range(16)))
 
         proceed_count = outcomes.count("proceed")
-        assert proceed_count <= 1, f"Round {r} produced {proceed_count} duplicate winners: {outcomes}"
+        assert proceed_count <= 1, (
+            f"Round {r} produced {proceed_count} duplicate winners: {outcomes}"
+        )
 
         with SQLiteStorage(db) as store:
             ledger = ActionLedger(store, f"run_stress_{r}")
