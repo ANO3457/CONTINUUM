@@ -164,6 +164,10 @@ jobs:
                   "This is also your first merged contribution here, which makes it extra special. If you want ideas for a next change, issues labeled `good first issue` are a good place to start. Welcome aboard."
                 );
               }
+              body.push(
+                "",
+                "⭐ If CONTINUUM helped you or you enjoyed contributing, please consider starring the repository, it helps more developers discover the project!"
+              );
 
               await github.rest.issues.createComment({
                 owner,
