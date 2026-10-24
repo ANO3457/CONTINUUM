@@ -10,6 +10,18 @@ Test counts: ~3680 collected on a minimal env.
 
 ### Added
 
+- **Sidecar trust and authentication hardening.**
+  Separated review confirmation from normal agent credentials. An agent holding a
+  normal client token cannot call `confirm` (`NotAuthorized`, HTTP 403), preventing
+  self-certification bypasses of human-in-the-loop review. The sidecar now accepts
+  dedicated confirm credentials via `CONTINUUM_SERVE_CONFIRM_TOKEN` and supports
+  per-client tokens via `CONTINUUM_SERVE_CLIENT_TOKENS`. The HTTP wire transport
+  accepts credentials via standard `Authorization: Bearer <token>` headers without
+  embedding tokens into JSON request bodies, and token verification uses constant-time
+  comparisons (`hmac.compare_digest`) against timing side channels. The HTTP listener
+  bind address is configurable via `--bind` and `CONTINUUM_SERVE_BIND`, with tested
+  reverse proxy configurations for Nginx and Caddy documented in `docs/guides/sidecar_tls_proxy.md`.
+
 - **Atomic claim in storage eliminates concurrent duplicate actions.**
   `ActionLedger.claim` now resolves and records within a single atomic storage
   transaction (`atomic_claim`). On SQLite, a single `BEGIN IMMEDIATE` transaction
