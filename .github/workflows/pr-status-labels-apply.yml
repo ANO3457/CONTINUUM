@@ -161,13 +161,19 @@ jobs:
               if (isFirstContribution) {
                 body.push(
                   "",
-                  "This is also your first merged contribution here, which makes it extra special. If you want ideas for a next change, issues labeled `good first issue` are a good place to start. Welcome aboard."
+                  "### 🎉 First Contribution Milestone Reached",
+                  `Your changes are approved and will become part of CONTINUUM. Thank you for contributing your time and skill, @${author}!`,
+                  "",
+                  "⭐ **Showcase your work:** Consider starring the repository to follow future releases containing your code and feature the project on your profile.",
+                  "",
+                  "🚀 **Keep your streak going:** When you are ready for your next quest, check out [`good first issue`](https://github.com/Cyrax321/CONTINUUM/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) tickets or start a discussion for a feature you would like to see."
+                );
+              } else {
+                body.push(
+                  "",
+                  "Welcome back, and thank you for continuing to shape CONTINUUM!"
                 );
               }
-              body.push(
-                "",
-                "⭐ If CONTINUUM helped you or you enjoyed contributing, please consider starring the repository, it helps more developers discover the project!"
-              );
 
               await github.rest.issues.createComment({
                 owner,

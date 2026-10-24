@@ -59,8 +59,6 @@ jobs:
             If you can add reproduction steps and your Python version, that
             helps a maintainer dig in faster. Someone will take a look soon,
             so keep an eye on this thread.
-
-            If CONTINUUM is useful to you, please consider giving the repo a star ⭐, it helps the project grow!
           pr_message: |
             Thanks for your first pull request to CONTINUUM.
 
@@ -72,5 +70,3 @@ jobs:
             Review feedback is normal and expected, so do not worry about
             getting everything perfect on the first try. Thanks again for
             contributing.
-
-            If CONTINUUM is helpful to you, please consider giving the repo a star ⭐, it helps more builders find the project!
