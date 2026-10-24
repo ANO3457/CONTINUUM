@@ -5621,6 +5621,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="wire transport (default: stdio; http serves POST /<method> JSON).",
     )
     serve.add_argument("--port", type=int, default=8765, help="port for --transport http.")
+    serve.add_argument(
+        "--bind",
+        default=os.environ.get("CONTINUUM_SERVE_BIND", "127.0.0.1"),
+        help="host address to bind for --transport http (default: 127.0.0.1, env: CONTINUUM_SERVE_BIND).",
+    )
 
     def cmd_dashboard(args: argparse.Namespace, storage: Storage, out: Any, err: Any) -> int:
         """Serve the read-only dashboard, blocking until interrupted.

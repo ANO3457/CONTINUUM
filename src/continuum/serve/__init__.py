@@ -135,14 +135,16 @@ def run_serve(
     instream: TextIO | None = None,
     outstream: TextIO | None = None,
     port: int = 8765,
+    bind: str | None = None,
 ) -> int:
     """Run the sidecar loop. Defaults to stdin/stdout for a real server."""
     server = SidecarServer(database=db)
+    bind_addr = bind or os.environ.get("CONTINUUM_SERVE_BIND") or "127.0.0.1"
     if transport == "http":
         from continuum.serve.server import SidecarHTTP
 
-        http = SidecarHTTP(server, port=port)
-        print(f"CONTINUUM sidecar listening on http://{'127.0.0.1'}:{http.port}", flush=True)
+        http = SidecarHTTP(server, port=port, bind=bind_addr)
+        print(f"CONTINUUM sidecar listening on http://{bind_addr}:{http.port}", flush=True)
         try:
             http.serve_forever()
         except KeyboardInterrupt:
@@ -167,4 +169,5 @@ def cmd_serve(args: Any, storage: Any, out: TextIO, err: TextIO) -> int:
         db=getattr(args, "db", None),
         transport=getattr(args, "transport", "stdio"),
         port=int(getattr(args, "port", 8765)),
+        bind=getattr(args, "bind", None),
     )
