@@ -9,7 +9,7 @@ Provides a canonical OpenAPI 3.1 definition for all sidecar endpoints:
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, cast
 
 OPENAPI_SPEC: dict[str, Any] = {
     "openapi": "3.1.0",
@@ -541,4 +541,4 @@ OPENAPI_SPEC: dict[str, Any] = {
 
 def get_openapi_spec() -> dict[str, Any]:
     """Return the canonical OpenAPI 3.1 specification dictionary."""
-    return json.loads(json.dumps(OPENAPI_SPEC))
+    return cast(dict[str, Any], json.loads(json.dumps(OPENAPI_SPEC)))
