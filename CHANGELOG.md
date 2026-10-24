@@ -10,6 +10,16 @@ Test counts: ~3680 collected on a minimal env.
 
 ### Added
 
+- **Wire specification and automated wire conformance suite.**
+  Published OpenAPI 3.1 specification for the CONTINUUM sidecar wire protocol
+  covering action interception and idempotency leases, completion, progress tracking,
+  checkpoints, semantic resume, and human confirmation. The sidecar now serves the
+  OpenAPI 3.1 document dynamically via `GET /openapi.json`, exposes health checks on
+  `GET /healthz`, returns the canonical `Continuum-Version: 1.0` header on all responses,
+  and structures wire errors with standardized error codes. Added the `continuum conformance`
+  CLI tool (`continuum conformance --url <endpoint>`) to validate any server implementation
+  against the full wire specification.
+
 - **Sidecar trust and authentication hardening.**
   Separated review confirmation from normal agent credentials. An agent holding a
   normal client token cannot call `confirm` (`NotAuthorized`, HTTP 403), preventing
