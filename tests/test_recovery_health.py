@@ -34,7 +34,7 @@ T0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 # --------------------------------------------------------------------------- #
-# CadenceContract — defaults
+# CadenceContract: defaults
 
 
 def test_contract_defaults_match_module_constants() -> None:
@@ -60,7 +60,7 @@ def test_contract_rejects_max_silence_below_one() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# CadenceContract — phase_scopes validator
+# CadenceContract: phase_scopes validator
 
 
 def test_contract_accepts_valid_phase_scopes() -> None:
@@ -74,9 +74,14 @@ def test_contract_rejects_phase_scope_value_below_one() -> None:
 
 
 def test_contract_rejects_phase_scope_non_int_value() -> None:
-    # A list cannot be coerced to int, so the validator is reached.
+    # Pydantic rejects the list before the custom validator runs.
     with pytest.raises(ValidationError):
-        CadenceContract(phase_scopes={"open_claim": [60]})  # type: ignore[dict-item]
+        CadenceContract(phase_scopes={"open_claim": [60]})
+
+
+def test_scopes_positive_rejects_non_int_value() -> None:
+    with pytest.raises(ValueError, match="must be an int >= 1"):
+        CadenceContract._scopes_positive({"open_claim": "not-an-int"})  # type: ignore[dict-item]
 
 
 def test_contract_rejects_empty_phase_scope_key() -> None:
@@ -85,7 +90,7 @@ def test_contract_rejects_empty_phase_scope_key() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# CadenceContract — threshold_for
+# CadenceContract: threshold_for
 
 
 def test_threshold_for_open_claim_uses_open_claim_scope() -> None:
@@ -113,7 +118,7 @@ def test_threshold_for_returns_int() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# CadenceContract — to_dict round-trip
+# CadenceContract: to_dict round-trip
 
 
 def test_to_dict_round_trips_through_model_validate() -> None:
@@ -143,13 +148,16 @@ def test_silence_seconds_negative_when_clock_skew_backwards() -> None:
 
 
 def test_silence_seconds_normalises_naive_datetimes_to_utc() -> None:
+    last = T0 - timedelta(seconds=5)
     naive_now = T0.replace(tzinfo=None)
-    naive_last = (T0 - timedelta(seconds=5)).replace(tzinfo=None)
+    naive_last = last.replace(tzinfo=None)
     assert silence_seconds(naive_now, naive_last) == 5.0
+    assert silence_seconds(naive_now, last) == 5.0
+    assert silence_seconds(T0, naive_last) == 5.0
 
 
 # --------------------------------------------------------------------------- #
-# evaluate — no events
+# evaluate: no events
 
 
 def test_evaluate_no_events_is_not_breached() -> None:
@@ -170,7 +178,7 @@ def test_evaluate_no_events_uses_open_claim_phase_when_claimed() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# evaluate — breach logic
+# evaluate: breach logic
 
 
 def _contract(max_silence: int, **scopes: int) -> CadenceContract:
@@ -311,7 +319,5 @@ def test_advisory_text_ok_mentions_ok() -> None:
 
 
 def test_advisory_text_defaults_phase_to_otherwise() -> None:
-    text = advisory_text(
-        {"breached": False, "silence_seconds": 1.0, "threshold_seconds": 60}
-    )
+    text = advisory_text({"breached": False, "silence_seconds": 1.0, "threshold_seconds": 60})
     assert "otherwise" in text
