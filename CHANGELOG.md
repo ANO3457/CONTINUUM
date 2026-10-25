@@ -245,7 +245,6 @@ Test counts: ~3950 collected on a minimal env.
   `progress` (`completed`, `pending`, `failed`, `total`), and `decisions`
   (`valid`, `total`). On an unprojectable run, the payload includes the
   `projection_failed_at` block and exits with code `ExitCode.CORRUPTED`.
->>>>>>> origin/main
 
 - **A developer's own venv and scratch database are no longer committed as the
   project's Continue registration (#1618).** PR #1612 added
@@ -263,7 +262,6 @@ Test counts: ~3950 collected on a minimal env.
   command resolved on one machine, which is why `install.py` resolves paths on
   the target machine in the first place. A test pins this per host, so a
   committed project registration fails CI instead of failing a clone.
->>>>>>> origin/main
 
 - **The documented test count is re-synced, so `main` builds again.** The
   collected total had drifted to 3,680 against a documented 3,636, past the
