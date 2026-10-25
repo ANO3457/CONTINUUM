@@ -89,6 +89,10 @@ Test counts: ~3950 collected on a minimal env.
   that moves while the queue is built.
 ### Fixed
 
+- **Benchmark report timestamps are timezone-aware UTC (#1823).** The Phase 6,
+  fault-injection, and horizon benchmark runners now use the shared `utcnow()`
+  helper, keeping report timestamps comparable across benchmark suites.
+
 - **`continuum doctor` no longer calls a portable path expression a broken
   path (#1619).** A committed registration may bake
   `${CLAUDE_PROJECT_DIR:-.}/.venv/bin/continuum-mcp`, the form for POSIX
