@@ -823,9 +823,11 @@ def test_write_blob_atomic_failure_and_stat_fallback(
         return original_read_bytes(self)
 
     monkeypatch.setattr(Path, "read_bytes", flaky_read_bytes)
+    blob_path.write_bytes(b"x" * len(canonical_bytes))
     rewritten = write_blob(tmp_path, canonical_bytes, sha256_hex=sha256_hex)
     assert rewritten == blob_path
     assert read_calls == 1
+    assert blob_path.read_bytes() == canonical_bytes
 
 
 def test_read_blob_converts_oserror_to_corrupted_record(
