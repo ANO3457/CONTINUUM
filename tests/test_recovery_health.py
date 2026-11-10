@@ -327,7 +327,6 @@ def test_advisory_text_defaults_phase_to_otherwise() -> None:
     assert "otherwise" in text
 
 
-
 # --------------------------------------------------------------------------- #
 # _last_event_ts, _has_open_claim, and advisory_for_storage fallbacks
 
